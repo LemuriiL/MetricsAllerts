@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"math/rand"
-	"time"
-
 	"github.com/LemuriiL/MetricsAllerts/internal/model"
+	"math/rand"
 	"runtime"
 )
 
@@ -14,7 +12,6 @@ type Collector struct {
 }
 
 func NewCollector() *Collector {
-	rand.Seed(time.Now().UnixNano())
 	return &Collector{
 		pollCount:   0,
 		randomValue: 0.0,
