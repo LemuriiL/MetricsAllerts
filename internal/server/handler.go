@@ -36,6 +36,7 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.SetGauge(metricName, val)
+
 	case "counter":
 		val, err := strconv.ParseInt(metricValueStr, 10, 64)
 		if err != nil {
@@ -43,14 +44,13 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.SetCounter(metricName, val)
+
 	default:
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte("Accepted.\n\n"))
-	fmt.Printf("Received metric: %s %s = %s\n", vars["type"], vars["name"], vars["value"])
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +87,7 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "<h1>All Metrics</h1>")
 	fmt.Fprintln(w, "<h2>Gauges</h2><ul>")
 	for name, value := range gauges {
-		fmt.Fprintf(w, "<li>%s: %f</li>", name, value)
+		fmt.Fprintf(w, "<li>%s: %g</li>", name, value)
 	}
 	fmt.Fprintln(w, "</ul><h2>Counters</h2><ul>")
 	for name, value := range counters {

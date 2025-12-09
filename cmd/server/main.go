@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"log"
-	"net"
+	"strings"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
@@ -11,17 +11,12 @@ import (
 
 func main() {
 	var addr string
-	flag.StringVar(&addr, "a", ":8080", "HTTP server address")
-
+	flag.StringVar(&addr, "a", "localhost:8080", "HTTP server address")
 	flag.Parse()
 
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		log.Fatalf("invalid address: %v", err)
-	}
-
-	if host == "localhost" || host == "127.0.0.1" {
-		addr = net.JoinHostPort("", port)
+	if strings.Contains(addr, ":") {
+		parts := strings.Split(addr, ":")
+		addr = ":" + parts[len(parts)-1]
 	}
 
 	store := storage.NewMemStorage()
