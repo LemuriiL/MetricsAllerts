@@ -27,6 +27,11 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) Run() {
+	metrics := a.collector.Collect()
+	for _, m := range metrics {
+		_ = a.sender.Send(m)
+	}
+
 	for {
 		select {
 		case <-a.stopCh:
