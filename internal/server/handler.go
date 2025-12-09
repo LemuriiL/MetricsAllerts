@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -22,6 +23,8 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	metricType := vars["type"]
 	metricName := vars["name"]
 	metricValueStr := vars["value"]
+
+	log.Printf("update metric: type=%s name=%s value=%s", metricType, metricName, metricValueStr)
 
 	if metricName == "" {
 		http.NotFound(w, r)
