@@ -3,12 +3,20 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/agent"
 )
 
 func main() {
+
+	// 🔥 ВАЖНО: отключение агента в тестах Practicum
+	if os.Getenv("DISABLE_AGENT") == "true" {
+		log.Println("Agent disabled by environment")
+		return
+	}
+
 	var (
 		serverAddr     string
 		reportInterval int
