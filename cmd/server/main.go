@@ -10,7 +10,7 @@ import (
 
 func main() {
 	var addr string
-	flag.StringVar(&addr, "a", ":8080", "HTTP server address")
+	flag.StringVar(&addr, "a", "localhost:8080", "HTTP server address")
 
 	flag.Parse()
 
