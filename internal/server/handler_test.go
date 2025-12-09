@@ -113,7 +113,7 @@ func TestGetMetricValue(t *testing.T) {
 		expectedStatus int
 		expectedBody   string
 	}{
-		{"existing gauge", "/value/gauge/mem", http.StatusOK, "1024.500000"},
+		{"existing gauge", "/value/gauge/mem", http.StatusOK, "1024.5"},
 		{"existing counter", "/value/counter/calls", http.StatusOK, "42"},
 		{"non-existing gauge", "/value/gauge/unknown", http.StatusNotFound, ""},
 		{"non-existing counter", "/value/counter/unknown", http.StatusNotFound, ""},
@@ -153,6 +153,6 @@ func TestGetAllMetrics(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
 	body := w.Body.String()
 	assert.Contains(t, body, "<h1>All Metrics</h1>")
-	assert.Contains(t, body, "temp: 36.600000")
+	assert.Contains(t, body, "temp: 36.6")
 	assert.Contains(t, body, "hits: 100")
 }

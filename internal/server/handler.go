@@ -62,7 +62,7 @@ func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
 	case "gauge":
 		if val, ok := h.storage.GetGauge(metricName); ok {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			fmt.Fprintf(w, "%f", val)
+			fmt.Fprintf(w, "%g", val)
 			return
 		}
 	case "counter":
