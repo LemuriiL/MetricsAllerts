@@ -70,23 +70,18 @@ func TestUpdateMetric(t *testing.T) {
 		name           string
 		method         string
 		url            string
-		contentType    string
 		expectedStatus int
 	}{
-		{"valid gauge", "POST", "/update/gauge/cpu/42.5", "text/plain", http.StatusOK},
-		{"valid counter", "POST", "/update/counter/req/10", "text/plain", http.StatusOK},
-		{"empty name", "POST", "/update/gauge//42.5", "text/plain", http.StatusNotFound},
-		{"invalid type", "POST", "/update/xxx/a/1", "text/plain", http.StatusBadRequest},
-		{"invalid number", "POST", "/update/gauge/a/abc", "text/plain", http.StatusBadRequest},
-		{"no content-type", "POST", "/update/gauge/a/1", "", http.StatusBadRequest},
+		{"valid gauge", "POST", "/update/gauge/cpu/42.5", http.StatusOK},
+		{"valid counter", "POST", "/update/counter/req/10", http.StatusOK},
+		{"empty name", "POST", "/update/gauge//42.5", http.StatusNotFound},
+		{"invalid type", "POST", "/update/xxx/a/1", http.StatusBadRequest},
+		{"invalid number", "POST", "/update/gauge/a/abc", http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.url, nil)
-			if tt.contentType != "" {
-				req.Header.Set("Content-Type", tt.contentType)
-			}
 			w := httptest.NewRecorder()
 
 			router.ServeHTTP(w, req)

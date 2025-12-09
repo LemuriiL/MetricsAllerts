@@ -18,11 +18,6 @@ func NewHandler(s storage.Storage) *Handler {
 }
 
 func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Content-Type") != "text/plain" {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-
 	vars := mux.Vars(r)
 	metricType := vars["type"]
 	metricName := vars["name"]
