@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/agent"
@@ -15,18 +16,23 @@ func main() {
 		pollInterval   int
 	)
 
-	flag.StringVar(&serverAddr, "a", "http://localhost:8080", "Server address")
+	flag.StringVar(&serverAddr, "a", "localhost:8080", "Server address (host:port)")
 	flag.IntVar(&reportInterval, "r", 10, "Report interval in seconds")
 	flag.IntVar(&pollInterval, "p", 2, "Poll interval in seconds")
 
 	flag.Parse()
 
-	agent := agent.NewAgent(
-		serverAddr,
+	httpAddr := serverAddr
+	if !strings.HasPrefix(httpAddr, "http://") && !strings.HasPrefix(httpAddr, "https://") {
+		httpAddr = "http://" + httpAddr
+	}
+
+	a := agent.NewAgent(
+		httpAddr,
 		time.Duration(pollInterval)*time.Second,
 		time.Duration(reportInterval)*time.Second,
 	)
 
 	log.Printf("Starting agent, poll=%ds, report=%ds, server=%s", pollInterval, reportInterval, serverAddr)
-	agent.Run()
+	a.Run()
 }

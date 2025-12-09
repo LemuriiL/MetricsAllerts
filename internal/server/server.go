@@ -25,9 +25,5 @@ func (s *Server) Run(addr string) error {
 	r.HandleFunc("/value/{type}/{name}", s.handler.GetMetricValue).Methods("GET")
 	r.HandleFunc("/", s.handler.GetAllMetrics).Methods("GET")
 
-	if len(addr) >= 9 && addr[:9] == "localhost" {
-		addr = "127.0.0.1" + addr[9:]
-	}
-
 	return http.ListenAndServe(addr, r)
 }
