@@ -11,7 +11,6 @@ import (
 
 func main() {
 
-	// 🔥 ВАЖНО: отключение агента в тестах Practicum
 	if os.Getenv("DISABLE_AGENT") == "true" {
 		log.Println("Agent disabled by environment")
 		return
