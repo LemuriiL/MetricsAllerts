@@ -3,19 +3,12 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
 	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/agent"
 )
 
 func main() {
-
-	if os.Getenv("DISABLE_AGENT") == "true" {
-		log.Println("Agent disabled by environment")
-		return
-	}
-
 	var (
 		serverAddr     string
 		reportInterval int
