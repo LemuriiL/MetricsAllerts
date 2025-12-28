@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/model"
 )
@@ -16,7 +17,9 @@ type Sender struct {
 func NewSender(serverAddr string) *Sender {
 	return &Sender{
 		serverAddr: serverAddr,
-		client:     &http.Client{},
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
 }
 

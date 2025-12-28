@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
@@ -8,11 +9,16 @@ import (
 )
 
 func main() {
+	var addr string
+	flag.StringVar(&addr, "a", "localhost:8080", "HTTP server address")
+
+	flag.Parse()
+
 	store := storage.NewMemStorage()
 	srv := server.New(store)
 
-	log.Println("Starting server on :8080")
-	if err := srv.Run(":8080"); err != nil {
+	log.Printf("Starting server on %s", addr)
+	if err := srv.Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }
