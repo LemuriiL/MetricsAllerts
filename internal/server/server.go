@@ -21,6 +21,8 @@ func (s *Server) Run(addr string) error {
 	r := mux.NewRouter()
 	r.SkipClean(true)
 
+	r.Use(loggingMiddleware)
+
 	r.HandleFunc("/update/{type}/{name}/{value}", s.handler.UpdateMetric).Methods("POST")
 	r.HandleFunc("/value/{type}/{name}", s.handler.GetMetricValue).Methods("GET")
 	r.HandleFunc("/", s.handler.GetAllMetrics).Methods("GET")
