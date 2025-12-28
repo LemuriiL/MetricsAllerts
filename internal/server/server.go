@@ -27,7 +27,9 @@ func (s *Server) Run(addr string) error {
 	r.HandleFunc("/value/{type}/{name}", s.handler.GetMetricValue).Methods("GET")
 	r.HandleFunc("/", s.handler.GetAllMetrics).Methods("GET")
 	r.HandleFunc("/update", s.handler.UpdateMetricJSON).Methods("POST")
+	r.HandleFunc("/update/", s.handler.UpdateMetricJSON).Methods("POST")
 	r.HandleFunc("/value", s.handler.GetMetricJSON).Methods("POST")
+	r.HandleFunc("/value/", s.handler.GetMetricJSON).Methods("POST")
 
 	return http.ListenAndServe(addr, r)
 }
