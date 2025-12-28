@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,8 +50,7 @@ func (s *MemStorage) GetCounter(name string) (int64, bool) {
 var store = NewMemStorage()
 
 func main() {
-	http.HandleFunc("/update/", updateHandler)
-	err := http.ListenAndServe(":8080", nil)
+	err := http.ListenAndServe(":8080", http.HandlerFunc(updateHandler))
 	if err != nil {
 		panic(err)
 	}
@@ -67,15 +67,25 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 5 {
+	if !strings.HasPrefix(r.URL.Path, "/update/") {
 		http.NotFound(w, r)
 		return
 	}
 
-	metricType := pathParts[2]
-	metricName := pathParts[3]
-	metricValueStr := pathParts[4]
+	if strings.Contains(r.URL.Path, "//") {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) != 5 {
+		http.NotFound(w, r)
+		return
+	}
+
+	metricType := parts[2]
+	metricName := parts[3]
+	metricValueStr := parts[4]
 
 	if metricName == "" {
 		http.NotFound(w, r)
@@ -104,4 +114,5 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte("Accepted.\n\n"))
+	fmt.Printf("Received: %s %s\n", r.Method, r.URL.Path)
 }
