@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"strconv"
+	"syscall"
 	"time"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
@@ -32,9 +34,8 @@ func (s *Sender) Send(metric models.Metrics) error {
 	if err != nil {
 		return err
 	}
-
 	url := fmt.Sprintf("%s/update", s.serverAddr)
-	return s.postJSON(url, body)
+	return s.postJSONWithRetry(url, body)
 }
 
 func (s *Sender) SendBatch(metrics []models.Metrics) error {
@@ -48,7 +49,7 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 	}
 
 	url := fmt.Sprintf("%s/updates", s.serverAddr)
-	err = s.postJSON(url, body)
+	err = s.postJSONWithRetry(url, body)
 	if err == nil {
 		return nil
 	}
@@ -60,6 +61,28 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 			}
 		}
 		return nil
+	}
+
+	return err
+}
+
+func (s *Sender) postJSONWithRetry(url string, body []byte) error {
+	waits := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+	err := s.postJSON(url, body)
+	if err == nil {
+		return nil
+	}
+
+	for i := 0; i < len(waits); i++ {
+		if !isRetryableHTTPError(err) {
+			return err
+		}
+		time.Sleep(waits[i])
+		err = s.postJSON(url, body)
+		if err == nil {
+			return nil
+		}
 	}
 
 	return err
@@ -107,30 +130,40 @@ func isEndpointNotSupported(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return containsStatus(msg, "404") || containsStatus(msg, "405") || containsText(msg, "endpoint not supported")
+	s := err.Error()
+	return bytes.Contains([]byte(s), []byte("404")) || bytes.Contains([]byte(s), []byte("405")) || bytes.Contains([]byte(s), []byte("endpoint not supported"))
 }
 
-func containsStatus(s string, code string) bool {
-	return containsText(s, code)
-}
-
-func containsText(s string, sub string) bool {
-	return len(sub) > 0 && indexOf(s, sub) >= 0
-}
-
-func indexOf(s string, sub string) int {
-	return bytes.Index([]byte(s), []byte(sub))
-}
-
-func metricToLegacyURL(serverAddr string, metric models.Metrics) (string, error) {
-	var valueStr string
-	if metric.MType == models.Gauge && metric.Value != nil {
-		valueStr = strconv.FormatFloat(*metric.Value, 'f', -1, 64)
-	} else if metric.MType == models.Counter && metric.Delta != nil {
-		valueStr = strconv.FormatInt(*metric.Delta, 10)
-	} else {
-		return "", fmt.Errorf("invalid metric type or value: %s", metric.ID)
+func isRetryableHTTPError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return fmt.Sprintf("%s/update/%s/%s/%s", serverAddr, metric.MType, metric.ID, valueStr), nil
+
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+
+	msg := err.Error()
+	if bytes.Contains([]byte(msg), []byte("connection refused")) {
+		return true
+	}
+	if bytes.Contains([]byte(msg), []byte("EOF")) {
+		return true
+	}
+
+	return false
 }
