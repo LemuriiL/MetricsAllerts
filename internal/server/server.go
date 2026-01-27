@@ -22,6 +22,8 @@ func (s *Server) Run(addr string) error {
 	r.SkipClean(true)
 
 	r.Use(loggingMiddleware)
+	r.Use(loggingMiddleware)
+	r.Use(gzipMiddleware)
 
 	r.HandleFunc("/update/{type}/{name}/{value}", s.handler.UpdateMetric).Methods("POST")
 	r.HandleFunc("/value/{type}/{name}", s.handler.GetMetricValue).Methods("GET")
