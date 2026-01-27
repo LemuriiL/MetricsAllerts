@@ -13,7 +13,7 @@ type FileStorage struct {
 	base      *MemStorage
 	path      string
 	syncWrite bool
-	mu        sync.Mutex
+	mu        sync.RWMutex
 }
 
 func NewFileStorage(path string, syncWrite bool) *FileStorage {
@@ -27,7 +27,7 @@ func NewFileStorage(path string, syncWrite bool) *FileStorage {
 func (s *FileStorage) SetGauge(name string, value float64) {
 	s.base.SetGauge(name, value)
 	if s.syncWrite {
-		_ = s.Save()
+		s.Save()
 	}
 }
 
@@ -38,7 +38,7 @@ func (s *FileStorage) GetGauge(name string) (float64, bool) {
 func (s *FileStorage) SetCounter(name string, value int64) {
 	s.base.SetCounter(name, value)
 	if s.syncWrite {
-		_ = s.Save()
+		s.Save()
 	}
 }
 
