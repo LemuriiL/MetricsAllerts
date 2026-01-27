@@ -244,10 +244,7 @@ func isRetryableDBError(err error) bool {
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		if pgerrcode.IsConnectionException(pgErr.Code) {
-			return true
-		}
-		return false
+		return pgerrcode.IsConnectionException(pgErr.Code)
 	}
 
 	msg := err.Error()
