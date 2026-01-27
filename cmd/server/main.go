@@ -1,12 +1,16 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/sirupsen/logrus"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
@@ -17,6 +21,7 @@ const (
 	defaultStoreInterval = 300
 	defaultFilePath      = "metrics-db.json"
 	defaultRestore       = true
+	defaultDSN           = ""
 )
 
 type stringFlag struct {
@@ -109,16 +114,19 @@ func main() {
 	storeInterval := defaultStoreInterval
 	filePath := defaultFilePath
 	restore := defaultRestore
+	dsn := defaultDSN
 
 	aFlag := &stringFlag{val: defaultAddr}
 	iFlag := &intFlag{val: defaultStoreInterval}
 	fFlag := &stringFlag{val: defaultFilePath}
 	rFlag := &boolFlag{val: defaultRestore}
+	dFlag := &stringFlag{val: defaultDSN}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
 	flag.Var(fFlag, "f", "File storage path")
 	flag.Var(rFlag, "r", "Restore from file on start")
+	flag.Var(dFlag, "d", "Database DSN")
 
 	flag.Parse()
 
@@ -146,6 +154,12 @@ func main() {
 		restore = rFlag.val
 	}
 
+	if v, ok := envString("DATABASE_DSN"); ok {
+		dsn = v
+	} else if dFlag.isSet {
+		dsn = dFlag.val
+	}
+
 	store := storage.NewFileStorage(filePath, storeInterval == 0)
 
 	if restore {
@@ -158,14 +172,28 @@ func main() {
 		ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
 		go func() {
 			for range ticker.C {
-				_ = store.Save()
+				store.Save()
 			}
 		}()
 	}
 
-	srv := server.New(store)
+	var db *sql.DB
+	if strings.TrimSpace(dsn) != "" {
+		var err error
+		logrus.Infof("DSN = %s", dsn)
+		db, err = sql.Open("pgx", dsn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := db.Ping(); err != nil {
+			log.Fatal(err)
+		}
+		defer db.Close()
+	}
 
-	log.Printf("Starting server on %s", addr)
+	srv := server.New(store, db)
+
+	logrus.Infof("Starting server on %s", addr)
 	if err := srv.Run(addr); err != nil {
 		log.Fatal(err)
 	}
