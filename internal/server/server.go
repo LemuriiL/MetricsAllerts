@@ -14,7 +14,7 @@ type Server struct {
 
 func New(storage storage.Storage, db *sql.DB) *Server {
 	return &Server{
-		handler: NewHandler(storage, db),
+		handler: NewHandlerWithDB(storage, db),
 	}
 }
 

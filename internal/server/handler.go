@@ -18,7 +18,11 @@ type Handler struct {
 	db      *sql.DB
 }
 
-func NewHandler(s storage.Storage, db *sql.DB) *Handler {
+func NewHandler(s storage.Storage) *Handler {
+	return &Handler{storage: s}
+}
+
+func NewHandlerWithDB(s storage.Storage, db *sql.DB) *Handler {
 	return &Handler{storage: s, db: db}
 }
 
