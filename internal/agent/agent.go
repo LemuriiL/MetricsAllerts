@@ -42,9 +42,9 @@ func (a *Agent) Stop() {
 
 func (a *Agent) Run() {
 	metrics := a.collector.Collect()
-	for _, m := range metrics {
-		if err := a.sender.Send(m); err != nil {
-			log.Printf("failed to send metric %s: %v", m.ID, err)
+	if len(metrics) > 0 {
+		if err := a.sender.SendBatch(metrics); err != nil {
+			log.Printf("failed to send batch: %v", err)
 		}
 	}
 
@@ -56,10 +56,11 @@ func (a *Agent) Run() {
 			a.collector.Collect()
 		case <-a.reportTicker.C:
 			metrics := a.collector.Collect()
-			for _, m := range metrics {
-				if err := a.sender.Send(m); err != nil {
-					log.Printf("failed to send metric %s: %v", m.ID, err)
-				}
+			if len(metrics) == 0 {
+				continue
+			}
+			if err := a.sender.SendBatch(metrics); err != nil {
+				log.Printf("failed to send batch: %v", err)
 			}
 		}
 	}

@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 	"github.com/gorilla/mux"
@@ -12,10 +15,15 @@ import (
 
 type Handler struct {
 	storage storage.Storage
+	db      *sql.DB
 }
 
 func NewHandler(s storage.Storage) *Handler {
 	return &Handler{storage: s}
+}
+
+func NewHandlerWithDB(s storage.Storage, db *sql.DB) *Handler {
+	return &Handler{storage: s, db: db}
 }
 
 func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +43,7 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	case "gauge":
 		val, err := strconv.ParseFloat(metricValueStr, 64)
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 		h.storage.SetGauge(metricName, val)
@@ -43,13 +51,13 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	case "counter":
 		val, err := strconv.ParseInt(metricValueStr, 10, 64)
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 		h.storage.SetCounter(metricName, val)
 
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -75,7 +83,7 @@ func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -97,4 +105,22 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<li>%s: %d</li>", name, value)
 	}
 	fmt.Fprintln(w, "</ul>")
+}
+
+func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	defer cancel()
+
+	if err := h.db.PingContext(ctx); err != nil {
+		log.Printf("db ping failed: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
