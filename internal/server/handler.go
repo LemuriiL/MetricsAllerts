@@ -43,7 +43,7 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	case "gauge":
 		val, err := strconv.ParseFloat(metricValueStr, 64)
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 		h.storage.SetGauge(metricName, val)
@@ -51,13 +51,13 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	case "counter":
 		val, err := strconv.ParseInt(metricValueStr, 10, 64)
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 		h.storage.SetCounter(metricName, val)
 
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -83,7 +83,7 @@ func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -109,7 +109,7 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -117,6 +117,7 @@ func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := h.db.PingContext(ctx); err != nil {
+		log.Printf("db ping failed: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

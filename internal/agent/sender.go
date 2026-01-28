@@ -3,17 +3,27 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"syscall"
 	"time"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
+
+type endpointNotSupportedError struct {
+	status int
+}
+
+func (e endpointNotSupportedError) Error() string {
+	return fmt.Sprintf("endpoint not supported: %d", e.status)
+}
 
 type Sender struct {
 	serverAddr string
@@ -34,8 +44,13 @@ func (s *Sender) Send(metric models.Metrics) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s/update", s.serverAddr)
-	return s.postJSONWithRetry(url, body)
+
+	u, err := url.JoinPath(s.serverAddr, "/update")
+	if err != nil {
+		return err
+	}
+
+	return s.postJSONWithRetry(context.Background(), u, body)
 }
 
 func (s *Sender) SendBatch(metrics []models.Metrics) error {
@@ -48,8 +63,12 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/updates", s.serverAddr)
-	err = s.postJSONWithRetry(url, body)
+	u, err := url.JoinPath(s.serverAddr, "/updates")
+	if err != nil {
+		return err
+	}
+
+	err = s.postJSONWithRetry(context.Background(), u, body)
 	if err == nil {
 		return nil
 	}
@@ -66,10 +85,10 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 	return err
 }
 
-func (s *Sender) postJSONWithRetry(url string, body []byte) error {
+func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) error {
 	waits := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 
-	err := s.postJSON(url, body)
+	err := s.postJSON(ctx, u, body)
 	if err == nil {
 		return nil
 	}
@@ -78,8 +97,16 @@ func (s *Sender) postJSONWithRetry(url string, body []byte) error {
 		if !isRetryableHTTPError(err) {
 			return err
 		}
-		time.Sleep(waits[i])
-		err = s.postJSON(url, body)
+
+		timer := time.NewTimer(waits[i])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		err = s.postJSON(ctx, u, body)
 		if err == nil {
 			return nil
 		}
@@ -88,7 +115,7 @@ func (s *Sender) postJSONWithRetry(url string, body []byte) error {
 	return err
 }
 
-func (s *Sender) postJSON(url string, body []byte) error {
+func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	if _, err := gw.Write(body); err != nil {
@@ -99,7 +126,7 @@ func (s *Sender) postJSON(url string, body []byte) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
 	if err != nil {
 		return err
 	}
@@ -115,7 +142,7 @@ func (s *Sender) postJSON(url string, body []byte) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return fmt.Errorf("endpoint not supported: %d", resp.StatusCode)
+		return endpointNotSupportedError{status: resp.StatusCode}
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -127,11 +154,8 @@ func (s *Sender) postJSON(url string, body []byte) error {
 }
 
 func isEndpointNotSupported(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return bytes.Contains([]byte(s), []byte("404")) || bytes.Contains([]byte(s), []byte("405")) || bytes.Contains([]byte(s), []byte("endpoint not supported"))
+	var e endpointNotSupportedError
+	return errors.As(err, &e)
 }
 
 func isRetryableHTTPError(err error) bool {

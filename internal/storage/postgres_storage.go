@@ -155,6 +155,28 @@ func (s *PostgresStorage) UpdateBatch(ms []models.Metrics) error {
 			return err
 		}
 
+		stmtGauge, err := tx.PrepareContext(ctx, `INSERT INTO metrics (id, type, value, delta)
+			 VALUES ($1, $2, $3, NULL)
+			 ON CONFLICT (id) DO UPDATE
+			 SET type = EXCLUDED.type, value = EXCLUDED.value, delta = NULL`)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		defer stmtGauge.Close()
+
+		stmtCounter, err := tx.PrepareContext(ctx, `INSERT INTO metrics (id, type, delta, value)
+			 VALUES ($1, $2, $3, NULL)
+			 ON CONFLICT (id) DO UPDATE
+			 SET type = EXCLUDED.type,
+			     delta = COALESCE(metrics.delta, 0) + EXCLUDED.delta,
+			     value = NULL`)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		defer stmtCounter.Close()
+
 		for i := range ms {
 			m := ms[i]
 			switch m.MType {
@@ -163,15 +185,7 @@ func (s *PostgresStorage) UpdateBatch(ms []models.Metrics) error {
 					_ = tx.Rollback()
 					return sql.ErrNoRows
 				}
-				_, err = tx.ExecContext(
-					ctx,
-					`INSERT INTO metrics (id, type, value, delta)
-					 VALUES ($1, $2, $3, NULL)
-					 ON CONFLICT (id) DO UPDATE
-					 SET type = EXCLUDED.type, value = EXCLUDED.value, delta = NULL`,
-					m.ID, models.Gauge, *m.Value,
-				)
-				if err != nil {
+				if _, err := stmtGauge.ExecContext(ctx, m.ID, models.Gauge, *m.Value); err != nil {
 					_ = tx.Rollback()
 					return err
 				}
@@ -180,17 +194,7 @@ func (s *PostgresStorage) UpdateBatch(ms []models.Metrics) error {
 					_ = tx.Rollback()
 					return sql.ErrNoRows
 				}
-				_, err = tx.ExecContext(
-					ctx,
-					`INSERT INTO metrics (id, type, delta, value)
-					 VALUES ($1, $2, $3, NULL)
-					 ON CONFLICT (id) DO UPDATE
-					 SET type = EXCLUDED.type,
-					     delta = COALESCE(metrics.delta, 0) + EXCLUDED.delta,
-					     value = NULL`,
-					m.ID, models.Counter, *m.Delta,
-				)
-				if err != nil {
+				if _, err := stmtCounter.ExecContext(ctx, m.ID, models.Counter, *m.Delta); err != nil {
 					_ = tx.Rollback()
 					return err
 				}
@@ -219,7 +223,14 @@ func (s *PostgresStorage) execRetry(fn func(ctx context.Context) error) error {
 		if !isRetryableDBError(err) {
 			return err
 		}
-		time.Sleep(waits[i])
+
+		timer := time.NewTimer(waits[i])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
 		err = fn(ctx2)
