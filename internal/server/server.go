@@ -34,6 +34,9 @@ func (s *Server) Run(addr string) error {
 	r.HandleFunc("/update", s.handler.UpdateMetricJSON).Methods(http.MethodPost)
 	r.HandleFunc("/update/", s.handler.UpdateMetricJSON).Methods(http.MethodPost)
 
+	r.HandleFunc("/updates", s.handler.UpdateMetricsJSON).Methods(http.MethodPost)
+	r.HandleFunc("/updates/", s.handler.UpdateMetricsJSON).Methods(http.MethodPost)
+
 	r.HandleFunc("/value", s.handler.GetMetricJSON).Methods(http.MethodPost)
 	r.HandleFunc("/value/", s.handler.GetMetricJSON).Methods(http.MethodPost)
 

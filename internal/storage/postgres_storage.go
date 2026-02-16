@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/LemuriiL/MetricsAllerts/internal/model"
+	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
 type PostgresStorage struct {
@@ -120,4 +120,61 @@ func (s *PostgresStorage) GetAllCounters() map[string]int64 {
 	}
 
 	return res
+}
+
+func (s *PostgresStorage) UpdateBatch(ms []models.Metrics) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	for i := range ms {
+		m := ms[i]
+		switch m.MType {
+		case models.Gauge:
+			if m.Value == nil {
+				_ = tx.Rollback()
+				return sql.ErrNoRows
+			}
+			_, err = tx.ExecContext(
+				ctx,
+				`INSERT INTO metrics (id, type, value, delta)
+				 VALUES ($1, $2, $3, NULL)
+				 ON CONFLICT (id) DO UPDATE
+				 SET type = EXCLUDED.type, value = EXCLUDED.value, delta = NULL`,
+				m.ID, models.Gauge, *m.Value,
+			)
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		case models.Counter:
+			if m.Delta == nil {
+				_ = tx.Rollback()
+				return sql.ErrNoRows
+			}
+			_, err = tx.ExecContext(
+				ctx,
+				`INSERT INTO metrics (id, type, delta, value)
+				 VALUES ($1, $2, $3, NULL)
+				 ON CONFLICT (id) DO UPDATE
+				 SET type = EXCLUDED.type,
+				     delta = COALESCE(metrics.delta, 0) + EXCLUDED.delta,
+				     value = NULL`,
+				m.ID, models.Counter, *m.Delta,
+			)
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		default:
+			_ = tx.Rollback()
+			return sql.ErrNoRows
+		}
+	}
+
+	return tx.Commit()
 }
