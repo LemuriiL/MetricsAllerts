@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
@@ -11,33 +12,44 @@ type batchUpdater interface {
 	UpdateBatch([]models.Metrics) error
 }
 
+type errResp struct {
+	Error string `json:"error"`
+}
+
+func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(errResp{Error: msg})
+}
+
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	var m models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	err := json.NewDecoder(r.Body).Decode(&m)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
 	if m.ID == "" || m.MType == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
 	switch m.MType {
 	case models.Gauge:
 		if m.Value == nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "bad request")
 			return
 		}
 		h.storage.SetGauge(m.ID, *m.Value)
 	case models.Counter:
 		if m.Delta == nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "bad request")
 			return
 		}
 		h.storage.SetCounter(m.ID, *m.Delta)
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
@@ -47,8 +59,9 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	var ms []models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&ms); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	err := json.NewDecoder(r.Body).Decode(&ms)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
@@ -59,7 +72,7 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 
 	if bu, ok := h.storage.(batchUpdater); ok {
 		if err := bu.UpdateBatch(ms); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -69,24 +82,24 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	for i := range ms {
 		m := ms[i]
 		if m.ID == "" || m.MType == "" {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "bad request")
 			return
 		}
 		switch m.MType {
 		case models.Gauge:
 			if m.Value == nil {
-				http.Error(w, "bad request", http.StatusBadRequest)
+				writeJSONError(w, http.StatusBadRequest, "bad request")
 				return
 			}
 			h.storage.SetGauge(m.ID, *m.Value)
 		case models.Counter:
 			if m.Delta == nil {
-				http.Error(w, "bad request", http.StatusBadRequest)
+				writeJSONError(w, http.StatusBadRequest, "bad request")
 				return
 			}
 			h.storage.SetCounter(m.ID, *m.Delta)
 		default:
-			http.Error(w, "bad request", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "bad request")
 			return
 		}
 	}
@@ -96,13 +109,18 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	var req models.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		if err == io.EOF {
+			writeJSONError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
 	if req.ID == "" || req.MType == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 
@@ -111,18 +129,18 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		if v, ok := h.storage.GetGauge(req.ID); ok {
 			req.Value = &v
 		} else {
-			http.NotFound(w, r)
+			writeJSONError(w, http.StatusNotFound, "not found")
 			return
 		}
 	case models.Counter:
 		if v, ok := h.storage.GetCounter(req.ID); ok {
 			req.Delta = &v
 		} else {
-			http.NotFound(w, r)
+			writeJSONError(w, http.StatusNotFound, "not found")
 			return
 		}
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 

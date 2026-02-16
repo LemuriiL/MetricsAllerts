@@ -61,14 +61,12 @@ func isCompressibleContentType(ct string) bool {
 
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isGzipEncoded(r) {
+		if isGzipEncoded(r) && r.Body != nil && r.Body != http.NoBody {
 			gr, err := gzip.NewReader(r.Body)
-			if err != nil {
-				http.Error(w, "bad gzip body", http.StatusBadRequest)
-				return
+			if err == nil {
+				defer gr.Close()
+				r.Body = io.NopCloser(gr)
 			}
-			defer gr.Close()
-			r.Body = io.NopCloser(gr)
 		}
 
 		if !isGzipAccepted(r) {
