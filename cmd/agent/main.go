@@ -70,6 +70,17 @@ func envInt(key string) (int, bool) {
 	return n, true
 }
 
+func normalizeKey(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if strings.EqualFold(v, "none") {
+		return ""
+	}
+	return v
+}
+
 func main() {
 	addr := defaultAddr
 	reportInterval := defaultReportInterval
@@ -111,6 +122,7 @@ func main() {
 	} else if kFlag.isSet {
 		key = kFlag.val
 	}
+	key = normalizeKey(key)
 
 	httpAddr := addr
 	if !strings.HasPrefix(httpAddr, "http://") && !strings.HasPrefix(httpAddr, "https://") {

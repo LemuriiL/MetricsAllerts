@@ -115,6 +115,17 @@ func envBool(key string) (bool, bool) {
 	return x, true
 }
 
+func normalizeKey(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if strings.EqualFold(v, "none") {
+		return ""
+	}
+	return v
+}
+
 func applyMigrations(db *sql.DB) error {
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
@@ -192,6 +203,7 @@ func main() {
 	} else if kFlag.isSet {
 		key = kFlag.val
 	}
+	key = normalizeKey(key)
 
 	var (
 		st  storage.Storage
@@ -225,7 +237,7 @@ func main() {
 			ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
 			go func() {
 				for range ticker.C {
-					fs.Save()
+					_ = fs.Save()
 				}
 			}()
 		}
