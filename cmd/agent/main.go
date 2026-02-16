@@ -16,6 +16,7 @@ const (
 	defaultReportInterval = 10
 	defaultPollInterval   = 2
 	defaultKey            = ""
+	defaultRateLimit      = 1
 )
 
 type stringFlag struct {
@@ -81,21 +82,31 @@ func normalizeKey(v string) string {
 	return v
 }
 
+func normalizeRateLimit(v int) int {
+	if v <= 0 {
+		return 1
+	}
+	return v
+}
+
 func main() {
 	addr := defaultAddr
 	reportInterval := defaultReportInterval
 	pollInterval := defaultPollInterval
 	key := defaultKey
+	rateLimit := defaultRateLimit
 
 	aFlag := &stringFlag{val: defaultAddr}
 	rFlag := &intFlag{val: defaultReportInterval}
 	pFlag := &intFlag{val: defaultPollInterval}
 	kFlag := &stringFlag{val: defaultKey}
+	lFlag := &intFlag{val: defaultRateLimit}
 
 	flag.Var(aFlag, "a", "Server address (host:port)")
 	flag.Var(rFlag, "r", "Report interval in seconds")
 	flag.Var(pFlag, "p", "Poll interval in seconds")
 	flag.Var(kFlag, "k", "Signing key")
+	flag.Var(lFlag, "l", "Rate limit (max concurrent outgoing requests)")
 
 	flag.Parse()
 
@@ -117,25 +128,33 @@ func main() {
 		pollInterval = pFlag.val
 	}
 
+	if v, ok := envInt("RATE_LIMIT"); ok {
+		rateLimit = v
+	} else if lFlag.isSet {
+		rateLimit = lFlag.val
+	}
+
 	if v, ok := envString("KEY"); ok {
 		key = v
 	} else if kFlag.isSet {
 		key = kFlag.val
 	}
 	key = normalizeKey(key)
+	rateLimit = normalizeRateLimit(rateLimit)
 
 	httpAddr := addr
 	if !strings.HasPrefix(httpAddr, "http://") && !strings.HasPrefix(httpAddr, "https://") {
 		httpAddr = "http://" + httpAddr
 	}
 
-	a := agent.NewAgentWithKey(
+	a := agent.NewAgentWithKeyAndLimit(
 		httpAddr,
 		time.Duration(pollInterval)*time.Second,
 		time.Duration(reportInterval)*time.Second,
 		key,
+		rateLimit,
 	)
 
-	log.Printf("Starting agent, poll=%ds, report=%ds, server=%s", pollInterval, reportInterval, addr)
+	log.Printf("Starting agent, poll=%ds, report=%ds, server=%s, rateLimit=%d", pollInterval, reportInterval, addr, rateLimit)
 	a.Run()
 }
