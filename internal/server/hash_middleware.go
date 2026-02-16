@@ -36,20 +36,19 @@ func (c *captureWriter) Flush() {
 func hashMiddleware(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			skipByHeader := func() bool {
-				v := strings.TrimSpace(r.Header.Get("HashSHA256"))
-				if v == "" {
-					v = strings.TrimSpace(r.Header.Get("Hash"))
-				}
-				return strings.EqualFold(v, "none")
-			}()
+			h := strings.TrimSpace(r.Header.Get("HashSHA256"))
+			if h == "" {
+				h = strings.TrimSpace(r.Header.Get("Hash"))
+			}
 
-			if skipByHeader {
+			if strings.EqualFold(h, "none") {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+			requestIsSigned := h != ""
+
+			if (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) && requestIsSigned {
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
 					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -57,25 +56,19 @@ func hashMiddleware(key string) func(http.Handler) http.Handler {
 				}
 				_ = r.Body.Close()
 
-				if len(body) > 0 {
-					got := strings.TrimSpace(r.Header.Get("HashSHA256"))
-					if got == "" {
-						got = strings.TrimSpace(r.Header.Get("Hash"))
-					}
-					if got == "" {
-						http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-						return
-					}
-
-					sum := sha256.Sum256(append(body, []byte(key)...))
-					want := hex.EncodeToString(sum[:])
-					if got != want {
-						http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-						return
-					}
+				sum := sha256.Sum256(append(body, []byte(key)...))
+				want := hex.EncodeToString(sum[:])
+				if h != want {
+					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+					return
 				}
 
 				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+
+			if !requestIsSigned {
+				next.ServeHTTP(w, r)
+				return
 			}
 
 			cw := &captureWriter{w: w, status: http.StatusOK}
