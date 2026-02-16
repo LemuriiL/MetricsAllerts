@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,8 +25,7 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	var m models.Metrics
-	err := json.NewDecoder(r.Body).Decode(&m)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
@@ -59,8 +59,7 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	var ms []models.Metrics
-	err := json.NewDecoder(r.Body).Decode(&ms)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&ms); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "bad request")
 		return
 	}
@@ -108,14 +107,20 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
-	var req models.Metrics
-	err := json.NewDecoder(r.Body).Decode(&req)
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if err == io.EOF {
-			writeJSONError(w, http.StatusNotFound, "not found")
-			return
-		}
-		writeJSONError(w, http.StatusBadRequest, "bad request")
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if len(bytes.TrimSpace(raw)) == 0 {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	var req models.Metrics
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
 
