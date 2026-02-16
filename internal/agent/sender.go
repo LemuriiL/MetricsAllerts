@@ -3,15 +3,27 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"strconv"
+	"net/url"
+	"syscall"
 	"time"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
+
+type endpointNotSupportedError struct {
+	status int
+}
+
+func (e endpointNotSupportedError) Error() string {
+	return fmt.Sprintf("endpoint not supported: %d", e.status)
+}
 
 type Sender struct {
 	serverAddr string
@@ -33,8 +45,12 @@ func (s *Sender) Send(metric models.Metrics) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/update", s.serverAddr)
-	return s.postJSON(url, body)
+	u, err := url.JoinPath(s.serverAddr, "/update")
+	if err != nil {
+		return err
+	}
+
+	return s.postJSONWithRetry(context.Background(), u, body)
 }
 
 func (s *Sender) SendBatch(metrics []models.Metrics) error {
@@ -47,8 +63,12 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/updates", s.serverAddr)
-	err = s.postJSON(url, body)
+	u, err := url.JoinPath(s.serverAddr, "/updates")
+	if err != nil {
+		return err
+	}
+
+	err = s.postJSONWithRetry(context.Background(), u, body)
 	if err == nil {
 		return nil
 	}
@@ -65,7 +85,37 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 	return err
 }
 
-func (s *Sender) postJSON(url string, body []byte) error {
+func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) error {
+	waits := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+	err := s.postJSON(ctx, u, body)
+	if err == nil {
+		return nil
+	}
+
+	for i := 0; i < len(waits); i++ {
+		if !isRetryableHTTPError(err) {
+			return err
+		}
+
+		timer := time.NewTimer(waits[i])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		err = s.postJSON(ctx, u, body)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return err
+}
+
+func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	if _, err := gw.Write(body); err != nil {
@@ -76,7 +126,7 @@ func (s *Sender) postJSON(url string, body []byte) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
 	if err != nil {
 		return err
 	}
@@ -92,7 +142,7 @@ func (s *Sender) postJSON(url string, body []byte) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return fmt.Errorf("endpoint not supported: %d", resp.StatusCode)
+		return endpointNotSupportedError{status: resp.StatusCode}
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -104,33 +154,40 @@ func (s *Sender) postJSON(url string, body []byte) error {
 }
 
 func isEndpointNotSupported(err error) bool {
+	var e endpointNotSupportedError
+	return errors.As(err, &e)
+}
+
+func isRetryableHTTPError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return containsStatus(msg, "404") || containsStatus(msg, "405") || containsText(msg, "endpoint not supported")
-}
 
-func containsStatus(s string, code string) bool {
-	return containsText(s, code)
-}
-
-func containsText(s string, sub string) bool {
-	return len(sub) > 0 && indexOf(s, sub) >= 0
-}
-
-func indexOf(s string, sub string) int {
-	return bytes.Index([]byte(s), []byte(sub))
-}
-
-func metricToLegacyURL(serverAddr string, metric models.Metrics) (string, error) {
-	var valueStr string
-	if metric.MType == models.Gauge && metric.Value != nil {
-		valueStr = strconv.FormatFloat(*metric.Value, 'f', -1, 64)
-	} else if metric.MType == models.Counter && metric.Delta != nil {
-		valueStr = strconv.FormatInt(*metric.Delta, 10)
-	} else {
-		return "", fmt.Errorf("invalid metric type or value: %s", metric.ID)
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
 	}
-	return fmt.Sprintf("%s/update/%s/%s/%s", serverAddr, metric.MType, metric.ID, valueStr), nil
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+
+	msg := err.Error()
+	if bytes.Contains([]byte(msg), []byte("connection refused")) {
+		return true
+	}
+	if bytes.Contains([]byte(msg), []byte("EOF")) {
+		return true
+	}
+
+	return false
 }

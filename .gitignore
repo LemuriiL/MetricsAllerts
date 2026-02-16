@@ -3,6 +3,7 @@
 *.dll
 *.so
 *.dylib
+metrics-db.json
 
 # Test binary, built with `go test -c`
 *.test
