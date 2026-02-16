@@ -14,12 +14,16 @@ type Agent struct {
 }
 
 func NewAgent(serverAddr string, pollInterval, reportInterval time.Duration) *Agent {
+	return NewAgentWithKey(serverAddr, pollInterval, reportInterval, "")
+}
+
+func NewAgentWithKey(serverAddr string, pollInterval, reportInterval time.Duration, key string) *Agent {
 	pollTicker := time.NewTicker(pollInterval)
 	reportTicker := time.NewTicker(reportInterval)
 
 	return &Agent{
 		collector:    NewCollector(),
-		sender:       NewSender(serverAddr),
+		sender:       NewSenderWithKey(serverAddr, key),
 		pollTicker:   pollTicker,
 		reportTicker: reportTicker,
 		stopCh:       make(chan struct{}),
@@ -42,9 +46,9 @@ func (a *Agent) Stop() {
 
 func (a *Agent) Run() {
 	metrics := a.collector.Collect()
-	if len(metrics) > 0 {
-		if err := a.sender.SendBatch(metrics); err != nil {
-			log.Printf("failed to send batch: %v", err)
+	for _, m := range metrics {
+		if err := a.sender.Send(m); err != nil {
+			log.Printf("failed to send metric %s: %v", m.ID, err)
 		}
 	}
 
@@ -56,11 +60,10 @@ func (a *Agent) Run() {
 			a.collector.Collect()
 		case <-a.reportTicker.C:
 			metrics := a.collector.Collect()
-			if len(metrics) == 0 {
-				continue
-			}
-			if err := a.sender.SendBatch(metrics); err != nil {
-				log.Printf("failed to send batch: %v", err)
+			for _, m := range metrics {
+				if err := a.sender.Send(m); err != nil {
+					log.Printf("failed to send metric %s: %v", m.ID, err)
+				}
 			}
 		}
 	}

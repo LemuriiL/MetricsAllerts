@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +29,18 @@ func (e endpointNotSupportedError) Error() string {
 
 type Sender struct {
 	serverAddr string
+	key        string
 	client     *http.Client
 }
 
 func NewSender(serverAddr string) *Sender {
+	return NewSenderWithKey(serverAddr, "")
+}
+
+func NewSenderWithKey(serverAddr string, key string) *Sender {
 	return &Sender{
 		serverAddr: serverAddr,
+		key:        key,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -134,6 +142,11 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
+
+	if s.key != "" {
+		sum := sha256.Sum256(append(body, []byte(s.key)...))
+		req.Header.Set("HashSHA256", hex.EncodeToString(sum[:]))
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
