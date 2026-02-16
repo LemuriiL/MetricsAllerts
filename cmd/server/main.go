@@ -12,6 +12,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sirupsen/logrus"
 
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 )
@@ -19,9 +23,9 @@ import (
 const (
 	defaultAddr          = "localhost:8080"
 	defaultStoreInterval = 300
-	defaultFilePath      = "metrics-db.json"
 	defaultRestore       = true
 	defaultDSN           = ""
+	defaultFilePath      = ""
 )
 
 type stringFlag struct {
@@ -109,6 +113,24 @@ func envBool(key string) (bool, bool) {
 	return x, true
 }
 
+func applyMigrations(db *sql.DB) error {
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		return err
+	}
+
+	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
+	if err != nil {
+		return err
+	}
+
+	err = m.Up()
+	if err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+	return nil
+}
+
 func main() {
 	addr := defaultAddr
 	storeInterval := defaultStoreInterval
@@ -160,27 +182,13 @@ func main() {
 		dsn = dFlag.val
 	}
 
-	store := storage.NewFileStorage(filePath, storeInterval == 0)
+	var (
+		st  storage.Storage
+		db  *sql.DB
+		err error
+	)
 
-	if restore {
-		if err := store.Restore(); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	if storeInterval > 0 {
-		ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
-		go func() {
-			for range ticker.C {
-				store.Save()
-			}
-		}()
-	}
-
-	var db *sql.DB
 	if strings.TrimSpace(dsn) != "" {
-		var err error
-		logrus.Infof("DSN = %s", dsn)
 		db, err = sql.Open("pgx", dsn)
 		if err != nil {
 			log.Fatal(err)
@@ -188,10 +196,35 @@ func main() {
 		if err := db.Ping(); err != nil {
 			log.Fatal(err)
 		}
+		if err := applyMigrations(db); err != nil {
+			log.Fatal(err)
+		}
 		defer db.Close()
+		st = storage.NewPostgresStorage(db)
+	} else if strings.TrimSpace(filePath) != "" {
+		fs := storage.NewFileStorage(filePath, storeInterval == 0)
+
+		if restore {
+			if err := fs.Restore(); err != nil {
+				log.Fatal(err)
+			}
+		}
+
+		if storeInterval > 0 {
+			ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
+			go func() {
+				for range ticker.C {
+					fs.Save()
+				}
+			}()
+		}
+
+		st = fs
+	} else {
+		st = storage.NewMemStorage()
 	}
 
-	srv := server.New(store, db)
+	srv := server.New(st, db)
 
 	logrus.Infof("Starting server on %s", addr)
 	if err := srv.Run(addr); err != nil {
