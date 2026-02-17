@@ -26,8 +26,10 @@ func (s *Server) Run(addr string) error {
 
 	r.Use(loggingMiddleware)
 	r.Use(gzipMiddleware)
+
 	if s.key != "" {
-		r.Use(hashMiddleware(s.key))
+		r.Use(verifyHashMiddleware(s.key))
+		r.Use(signHashMiddleware(s.key))
 	}
 
 	r.HandleFunc("/ping", s.handler.Ping).Methods(http.MethodGet)

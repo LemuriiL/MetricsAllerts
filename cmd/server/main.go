@@ -4,18 +4,16 @@ import (
 	"database/sql"
 	"flag"
 	"log"
-	"os"
-	"strconv"
 	"strings"
 	"time"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/sirupsen/logrus"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/sirupsen/logrus"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/cli"
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 )
@@ -29,135 +27,41 @@ const (
 	defaultKey           = ""
 )
 
-type stringFlag struct {
-	val   string
-	isSet bool
-}
-
-func (s *stringFlag) String() string { return s.val }
-func (s *stringFlag) Set(v string) error {
-	s.val = v
-	s.isSet = true
-	return nil
-}
-
-type intFlag struct {
-	val   int
-	isSet bool
-}
-
-func (i *intFlag) String() string { return strconv.Itoa(i.val) }
-func (i *intFlag) Set(v string) error {
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return err
-	}
-	i.val = n
-	i.isSet = true
-	return nil
-}
-
-type boolFlag struct {
-	val   bool
-	isSet bool
-}
-
-func (b *boolFlag) String() string {
-	if b.val {
-		return "true"
-	}
-	return "false"
-}
-
-func (b *boolFlag) Set(v string) error {
-	x, err := strconv.ParseBool(v)
-	if err != nil {
-		return err
-	}
-	b.val = x
-	b.isSet = true
-	return nil
-}
-
-func envString(key string) (string, bool) {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return "", false
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return "", false
-	}
-	return v, true
-}
-
-func envInt(key string) (int, bool) {
-	v, ok := envString(key)
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
-
-func envBool(key string) (bool, bool) {
-	v, ok := envString(key)
-	if !ok {
-		return false, false
-	}
-	x, err := strconv.ParseBool(v)
-	if err != nil {
-		return false, false
-	}
-	return x, true
-}
-
-func normalizeKey(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return ""
-	}
-	if strings.EqualFold(v, "none") {
-		return ""
-	}
-	return v
-}
-
-func applyMigrations(db *sql.DB) error {
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
-	if err != nil {
-		return err
-	}
-
-	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
-	if err != nil {
-		return err
-	}
-
-	err = m.Up()
-	if err != nil && err != migrate.ErrNoChange {
-		return err
-	}
-	return nil
+type serverConfig struct {
+	Addr          string
+	StoreInterval int
+	FilePath      string
+	Restore       bool
+	DSN           string
+	Key           string
 }
 
 func main() {
-	addr := defaultAddr
-	storeInterval := defaultStoreInterval
-	filePath := defaultFilePath
-	restore := defaultRestore
-	dsn := defaultDSN
-	key := defaultKey
+	cfg := loadConfig()
 
-	aFlag := &stringFlag{val: defaultAddr}
-	iFlag := &intFlag{val: defaultStoreInterval}
-	fFlag := &stringFlag{val: defaultFilePath}
-	rFlag := &boolFlag{val: defaultRestore}
-	dFlag := &stringFlag{val: defaultDSN}
-	kFlag := &stringFlag{val: defaultKey}
+	st, db, closeFn, err := initStorage(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if closeFn != nil {
+		defer closeFn()
+	}
+
+	srv := server.New(st, db, cfg.Key)
+
+	logrus.Infof("Starting server on %s", cfg.Addr)
+	if err := srv.Run(cfg.Addr); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func loadConfig() serverConfig {
+	aFlag := &cli.StringFlag{Val: defaultAddr}
+	iFlag := &cli.IntFlag{Val: defaultStoreInterval}
+	fFlag := &cli.StringFlag{Val: defaultFilePath}
+	rFlag := &cli.BoolFlag{Val: defaultRestore}
+	dFlag := &cli.StringFlag{Val: defaultDSN}
+	kFlag := &cli.StringFlag{Val: defaultKey}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
@@ -165,92 +69,108 @@ func main() {
 	flag.Var(rFlag, "r", "Restore from file on start")
 	flag.Var(dFlag, "d", "Database DSN")
 	flag.Var(kFlag, "k", "Signing key")
-
 	flag.Parse()
 
-	if v, ok := envString("ADDRESS"); ok {
-		addr = v
-	} else if aFlag.isSet {
-		addr = aFlag.val
+	addr := cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr)
+	storeInterval := cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval)
+	filePath := cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath)
+	restore := cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore)
+	dsn := cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN)
+	key := cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)
+
+	key = cli.NormalizeKey(key)
+
+	return serverConfig{
+		Addr:          addr,
+		StoreInterval: storeInterval,
+		FilePath:      filePath,
+		Restore:       restore,
+		DSN:           dsn,
+		Key:           key,
 	}
+}
 
-	if v, ok := envInt("STORE_INTERVAL"); ok {
-		storeInterval = v
-	} else if iFlag.isSet {
-		storeInterval = iFlag.val
-	}
-
-	if v, ok := envString("FILE_STORAGE_PATH"); ok {
-		filePath = v
-	} else if fFlag.isSet {
-		filePath = fFlag.val
-	}
-
-	if v, ok := envBool("RESTORE"); ok {
-		restore = v
-	} else if rFlag.isSet {
-		restore = rFlag.val
-	}
-
-	if v, ok := envString("DATABASE_DSN"); ok {
-		dsn = v
-	} else if dFlag.isSet {
-		dsn = dFlag.val
-	}
-
-	if v, ok := envString("KEY"); ok {
-		key = v
-	} else if kFlag.isSet {
-		key = kFlag.val
-	}
-	key = normalizeKey(key)
-
-	var (
-		st  storage.Storage
-		db  *sql.DB
-		err error
-	)
-
-	if strings.TrimSpace(dsn) != "" {
-		db, err = sql.Open("pgx", dsn)
+func initStorage(cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
+	if strings.TrimSpace(cfg.DSN) != "" {
+		db, err := openDB(cfg.DSN)
 		if err != nil {
-			log.Fatal(err)
-		}
-		if err := db.Ping(); err != nil {
-			log.Fatal(err)
+			return nil, nil, nil, err
 		}
 		if err := applyMigrations(db); err != nil {
-			log.Fatal(err)
+			_ = db.Close()
+			return nil, nil, nil, err
 		}
-		defer db.Close()
-		st = storage.NewPostgresStorage(db)
-	} else if strings.TrimSpace(filePath) != "" {
-		fs := storage.NewFileStorage(filePath, storeInterval == 0)
+		st := storage.NewPostgresStorage(db)
+		return st, db, func() { _ = db.Close() }, nil
+	}
 
-		if restore {
+	if strings.TrimSpace(cfg.FilePath) != "" {
+		fs := storage.NewFileStorage(cfg.FilePath, cfg.StoreInterval == 0)
+
+		if cfg.Restore {
 			if err := fs.Restore(); err != nil {
-				log.Fatal(err)
+				return nil, nil, nil, err
 			}
 		}
 
-		if storeInterval > 0 {
-			ticker := time.NewTicker(time.Duration(storeInterval) * time.Second)
-			go func() {
-				for range ticker.C {
-					_ = fs.Save()
-				}
-			}()
+		stop := startPeriodicSave(fs, cfg.StoreInterval)
+		return fs, nil, stop, nil
+	}
+
+	return storage.NewMemStorage(), nil, nil, nil
+}
+
+func openDB(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func applyMigrations(db *sql.DB) error {
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		return err
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
+	if err != nil {
+		return err
+	}
+	err = m.Up()
+	if err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+	return nil
+}
+
+func startPeriodicSave(fs *storage.FileStorage, interval int) func() {
+	if interval <= 0 {
+		return nil
+	}
+
+	ticker := timeNewTickerSeconds(interval)
+	stopCh := make(chan struct{})
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				_ = fs.Save()
+			}
 		}
+	}()
 
-		st = fs
-	} else {
-		st = storage.NewMemStorage()
-	}
+	return func() { close(stopCh) }
+}
 
-	srv := server.New(st, db, key)
-
-	logrus.Infof("Starting server on %s", addr)
-	if err := srv.Run(addr); err != nil {
-		log.Fatal(err)
-	}
+func timeNewTickerSeconds(sec int) *time.Ticker {
+	return time.NewTicker(time.Duration(sec) * time.Second)
 }
