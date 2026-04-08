@@ -13,6 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sirupsen/logrus"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cli"
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
@@ -25,6 +26,8 @@ const (
 	defaultDSN           = ""
 	defaultFilePath      = ""
 	defaultKey           = ""
+	defaultAuditFile     = ""
+	defaultAuditURL      = ""
 )
 
 type serverConfig struct {
@@ -34,6 +37,8 @@ type serverConfig struct {
 	Restore       bool
 	DSN           string
 	Key           string
+	AuditFile     string
+	AuditURL      string
 }
 
 func main() {
@@ -49,6 +54,11 @@ func main() {
 
 	srv := server.New(st, db, cfg.Key)
 
+	auditor := initAuditor(cfg)
+	if auditor != nil {
+		srv.SetAuditor(auditor)
+	}
+
 	logrus.Infof("Starting server on %s", cfg.Addr)
 	if err := srv.Run(cfg.Addr); err != nil {
 		log.Fatal(err)
@@ -62,6 +72,8 @@ func loadConfig() serverConfig {
 	rFlag := &cli.BoolFlag{Val: defaultRestore}
 	dFlag := &cli.StringFlag{Val: defaultDSN}
 	kFlag := &cli.StringFlag{Val: defaultKey}
+	afFlag := &cli.StringFlag{Val: defaultAuditFile}
+	auFlag := &cli.StringFlag{Val: defaultAuditURL}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
@@ -69,24 +81,19 @@ func loadConfig() serverConfig {
 	flag.Var(rFlag, "r", "Restore from file on start")
 	flag.Var(dFlag, "d", "Database DSN")
 	flag.Var(kFlag, "k", "Signing key")
+	flag.Var(afFlag, "audit-file", "Audit log file path")
+	flag.Var(auFlag, "audit-url", "Audit receiver URL")
 	flag.Parse()
 
-	addr := cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr)
-	storeInterval := cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval)
-	filePath := cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath)
-	restore := cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore)
-	dsn := cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN)
-	key := cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)
-
-	key = cli.NormalizeKey(key)
-
 	return serverConfig{
-		Addr:          addr,
-		StoreInterval: storeInterval,
-		FilePath:      filePath,
-		Restore:       restore,
-		DSN:           dsn,
-		Key:           key,
+		Addr:          cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr),
+		StoreInterval: cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval),
+		FilePath:      cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath),
+		Restore:       cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore),
+		DSN:           cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN),
+		Key:           cli.NormalizeKey(cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)),
+		AuditFile:     cli.PickString("AUDIT_FILE", afFlag.Val, afFlag.IsSet, defaultAuditFile),
+		AuditURL:      cli.PickString("AUDIT_URL", auFlag.Val, auFlag.IsSet, defaultAuditURL),
 	}
 }
 
@@ -100,8 +107,7 @@ func initStorage(cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
 			_ = db.Close()
 			return nil, nil, nil, err
 		}
-		st := storage.NewPostgresStorage(db)
-		return st, db, func() { _ = db.Close() }, nil
+		return storage.NewPostgresStorage(db), db, func() { _ = db.Close() }, nil
 	}
 
 	if strings.TrimSpace(cfg.FilePath) != "" {
@@ -113,7 +119,28 @@ func initStorage(cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
 			}
 		}
 
-		stop := startPeriodicSave(fs, cfg.StoreInterval)
+		var stop func()
+		if cfg.StoreInterval > 0 {
+			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+			stopCh := make(chan struct{})
+
+			go func() {
+				defer ticker.Stop()
+				for {
+					select {
+					case <-stopCh:
+						return
+					case <-ticker.C:
+						_ = fs.Save()
+					}
+				}
+			}()
+
+			stop = func() {
+				close(stopCh)
+			}
+		}
+
 		return fs, nil, stop, nil
 	}
 
@@ -137,10 +164,12 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+
 	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
 	if err != nil {
 		return err
 	}
+
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {
 		return err
@@ -148,29 +177,20 @@ func applyMigrations(db *sql.DB) error {
 	return nil
 }
 
-func startPeriodicSave(fs *storage.FileStorage, interval int) func() {
-	if interval <= 0 {
+func initAuditor(cfg serverConfig) *audit.Broadcaster {
+	if strings.TrimSpace(cfg.AuditFile) == "" && strings.TrimSpace(cfg.AuditURL) == "" {
 		return nil
 	}
 
-	ticker := timeNewTickerSeconds(interval)
-	stopCh := make(chan struct{})
+	b := audit.NewBroadcaster()
 
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopCh:
-				return
-			case <-ticker.C:
-				_ = fs.Save()
-			}
-		}
-	}()
+	if strings.TrimSpace(cfg.AuditFile) != "" {
+		b.Subscribe(audit.NewFileObserver(cfg.AuditFile))
+	}
 
-	return func() { close(stopCh) }
-}
+	if strings.TrimSpace(cfg.AuditURL) != "" {
+		b.Subscribe(audit.NewHTTPObserver(cfg.AuditURL))
+	}
 
-func timeNewTickerSeconds(sec int) *time.Ticker {
-	return time.NewTicker(time.Duration(sec) * time.Second)
+	return b
 }

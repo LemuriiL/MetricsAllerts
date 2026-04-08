@@ -53,6 +53,8 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.emitAudit(r, []string{m.ID})
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(m)
 }
@@ -69,11 +71,39 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	names := make([]string, 0, len(ms))
+
 	if bu, ok := h.storage.(batchUpdater); ok {
+		for i := range ms {
+			m := ms[i]
+			if m.ID == "" || m.MType == "" {
+				writeJSONError(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			switch m.MType {
+			case models.Gauge:
+				if m.Value == nil {
+					writeJSONError(w, http.StatusBadRequest, "bad request")
+					return
+				}
+			case models.Counter:
+				if m.Delta == nil {
+					writeJSONError(w, http.StatusBadRequest, "bad request")
+					return
+				}
+			default:
+				writeJSONError(w, http.StatusBadRequest, "bad request")
+				return
+			}
+			names = append(names, m.ID)
+		}
+
 		if err := bu.UpdateBatch(ms); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+
+		h.emitAudit(r, names)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -101,8 +131,10 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "bad request")
 			return
 		}
+		names = append(names, m.ID)
 	}
 
+	h.emitAudit(r, names)
 	w.WriteHeader(http.StatusOK)
 }
 

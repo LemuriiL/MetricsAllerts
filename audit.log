@@ -1,0 +1,2 @@
+{"ts":1775669507,"metrics":["Alloc"],"ip_address":"127.0.0.1"}
+{"ts":1775669566,"metrics":["Alloc","HeapAlloc"],"ip_address":"127.0.0.1"}
