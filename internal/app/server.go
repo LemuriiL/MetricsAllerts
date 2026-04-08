@@ -71,7 +71,7 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 		st = storage.NewMemStorage()
 	}
 
-	srv := server.New(st, db)
+	srv := server.New(st, db, "")
 
 	go func() {
 		if err := srv.Run(cfg.Address); err != nil {

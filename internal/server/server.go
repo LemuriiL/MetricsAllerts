@@ -10,11 +10,13 @@ import (
 
 type Server struct {
 	handler *Handler
+	key     string
 }
 
-func New(storage storage.Storage, db *sql.DB) *Server {
+func New(storage storage.Storage, db *sql.DB, key string) *Server {
 	return &Server{
 		handler: NewHandlerWithDB(storage, db),
+		key:     key,
 	}
 }
 
@@ -24,6 +26,9 @@ func (s *Server) Run(addr string) error {
 
 	r.Use(loggingMiddleware)
 	r.Use(gzipMiddleware)
+	if s.key != "" {
+		r.Use(hashMiddleware(s.key))
+	}
 
 	r.HandleFunc("/ping", s.handler.Ping).Methods(http.MethodGet)
 

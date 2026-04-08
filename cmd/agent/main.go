@@ -15,6 +15,7 @@ const (
 	defaultAddr           = "localhost:8080"
 	defaultReportInterval = 10
 	defaultPollInterval   = 2
+	defaultKey            = ""
 )
 
 type stringFlag struct {
@@ -69,18 +70,32 @@ func envInt(key string) (int, bool) {
 	return n, true
 }
 
+func normalizeKey(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if strings.EqualFold(v, "none") {
+		return ""
+	}
+	return v
+}
+
 func main() {
 	addr := defaultAddr
 	reportInterval := defaultReportInterval
 	pollInterval := defaultPollInterval
+	key := defaultKey
 
 	aFlag := &stringFlag{val: defaultAddr}
 	rFlag := &intFlag{val: defaultReportInterval}
 	pFlag := &intFlag{val: defaultPollInterval}
+	kFlag := &stringFlag{val: defaultKey}
 
 	flag.Var(aFlag, "a", "Server address (host:port)")
 	flag.Var(rFlag, "r", "Report interval in seconds")
 	flag.Var(pFlag, "p", "Poll interval in seconds")
+	flag.Var(kFlag, "k", "Signing key")
 
 	flag.Parse()
 
@@ -102,15 +117,23 @@ func main() {
 		pollInterval = pFlag.val
 	}
 
+	if v, ok := envString("KEY"); ok {
+		key = v
+	} else if kFlag.isSet {
+		key = kFlag.val
+	}
+	key = normalizeKey(key)
+
 	httpAddr := addr
 	if !strings.HasPrefix(httpAddr, "http://") && !strings.HasPrefix(httpAddr, "https://") {
 		httpAddr = "http://" + httpAddr
 	}
 
-	a := agent.NewAgent(
+	a := agent.NewAgentWithKey(
 		httpAddr,
 		time.Duration(pollInterval)*time.Second,
 		time.Duration(reportInterval)*time.Second,
+		key,
 	)
 
 	log.Printf("Starting agent, poll=%ds, report=%ds, server=%s", pollInterval, reportInterval, addr)
