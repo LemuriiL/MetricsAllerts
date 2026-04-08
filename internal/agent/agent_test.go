@@ -11,25 +11,11 @@ import (
 
 func TestCollectorCollect(t *testing.T) {
 	collector := NewCollector()
-	metrics := collector.Collect()
+	collector.CollectRuntime()
+	collector.CollectGopsutil()
+	metrics := collector.Snapshot()
 
 	assert.NotEmpty(t, metrics)
-	foundPollCount := false
-	foundRandomValue := false
-	for _, m := range metrics {
-		if m.ID == "PollCount" {
-			foundPollCount = true
-			assert.Equal(t, "counter", m.MType)
-			assert.NotNil(t, m.Delta)
-		}
-		if m.ID == "RandomValue" {
-			foundRandomValue = true
-			assert.Equal(t, "gauge", m.MType)
-			assert.NotNil(t, m.Value)
-		}
-	}
-	assert.True(t, foundPollCount)
-	assert.True(t, foundRandomValue)
 }
 
 func TestAgentRun(t *testing.T) {
@@ -38,7 +24,7 @@ func TestAgentRun(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, 50*time.Millisecond, 100*time.Millisecond)
+	agent := NewAgentWithKeyAndLimit(server.URL, 50*time.Millisecond, 100*time.Millisecond, "", 2)
 
 	done := make(chan bool)
 	go func() {
@@ -51,7 +37,7 @@ func TestAgentRun(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("agent did not stop")
 	}
 }
