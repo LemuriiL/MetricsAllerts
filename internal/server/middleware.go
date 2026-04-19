@@ -32,22 +32,20 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		lw := &loggingResponseWriter{ResponseWriter: w}
-
 		next.ServeHTTP(lw, r)
-
-		duration := time.Since(start)
 
 		status := lw.status
 		if status == 0 {
 			status = http.StatusOK
 		}
 
-		logrus.WithFields(logrus.Fields{
-			"uri":      r.RequestURI,
-			"method":   r.Method,
-			"duration": duration.String(),
-			"status":   status,
-			"size":     lw.size,
-		}).Info("request handled")
+		logrus.Infof(
+			"request handled uri=%s method=%s duration=%s status=%d size=%d",
+			r.RequestURI,
+			r.Method,
+			time.Since(start).String(),
+			status,
+			lw.size,
+		)
 	})
 }

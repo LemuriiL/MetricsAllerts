@@ -42,6 +42,7 @@ type serverConfig struct {
 }
 
 func main() {
+	runPPROF()
 	cfg := loadConfig()
 
 	st, db, closeFn, err := initStorage(cfg)
