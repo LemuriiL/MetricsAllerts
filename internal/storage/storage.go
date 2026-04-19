@@ -2,6 +2,7 @@ package storage
 
 import "sync"
 
+// Storage — интерфейс хранилища метрик
 type Storage interface {
 	SetGauge(name string, value float64)
 	GetGauge(name string) (float64, bool)
@@ -11,6 +12,7 @@ type Storage interface {
 	GetAllCounters() map[string]int64
 }
 
+// MemStorage хранит метрики в памяти
 type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64

@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// ServerConfig хранит настройки сервера
 type ServerConfig struct {
 	Address       string
 	StoreInterval int

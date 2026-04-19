@@ -41,6 +41,7 @@ type serverConfig struct {
 	AuditURL      string
 }
 
+// main точка входа сервера
 func main() {
 	runPPROF()
 	cfg := loadConfig()

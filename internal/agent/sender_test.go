@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/LemuriiL/MetricsAllerts/internal/model"
+	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 	"github.com/stretchr/testify/assert"
 )
 

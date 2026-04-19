@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/LemuriiL/MetricsAllerts/internal/model"
+	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
+// FileStorage хранит метрики в файле
 type FileStorage struct {
 	base      *MemStorage
 	path      string
