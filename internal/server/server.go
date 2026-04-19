@@ -9,11 +9,13 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// server — это основной http сервер, который принимает метрики
 type Server struct {
 	handler *Handler
 	key     string
 }
 
+// New создает новый сервер с хранилищем и базой
 func New(storage storage.Storage, db *sql.DB, key string) *Server {
 	return &Server{
 		handler: NewHandlerWithDB(storage, db),
@@ -25,6 +27,7 @@ func (s *Server) SetAuditor(a *audit.Broadcaster) {
 	s.handler.SetAuditor(a)
 }
 
+// Run запускает http сервер и навешивает все хендлеры и middleware
 func (s *Server) Run(addr string) error {
 	r := mux.NewRouter()
 	r.SkipClean(true)

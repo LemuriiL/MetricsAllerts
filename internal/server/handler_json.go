@@ -23,6 +23,7 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(errResp{Error: msg})
 }
 
+// UpdateMetricJSON обновляет метрику через json
 func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	var m models.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
@@ -59,6 +60,7 @@ func (h *Handler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(m)
 }
 
+// UpdateMetricsJSON обновляет сразу несколько метрик
 func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	var ms []models.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&ms); err != nil {
@@ -138,6 +140,7 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// GetMetricJSON возвращает метрику через json
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
