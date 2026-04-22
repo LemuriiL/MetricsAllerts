@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,8 +13,8 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/sirupsen/logrus"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cli"
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
@@ -25,6 +27,8 @@ const (
 	defaultDSN           = ""
 	defaultFilePath      = ""
 	defaultKey           = ""
+	defaultAuditFile     = ""
+	defaultAuditURL      = ""
 )
 
 type serverConfig struct {
@@ -34,22 +38,33 @@ type serverConfig struct {
 	Restore       bool
 	DSN           string
 	Key           string
+	AuditFile     string
+	AuditURL      string
 }
 
 func main() {
+	runPPROF()
+
 	cfg := loadConfig()
 
-	st, db, closeFn, err := initStorage(cfg)
+	st, db, closeFn, err := initStorage(context.Background(), cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	if closeFn != nil {
 		defer closeFn()
 	}
 
 	srv := server.New(st, db, cfg.Key)
 
-	logrus.Infof("Starting server on %s", cfg.Addr)
+	auditor := initAuditor(cfg)
+	if auditor != nil {
+		srv.SetAuditor(auditor)
+	}
+
+	slog.Info("starting server", "addr", cfg.Addr)
+
 	if err := srv.Run(cfg.Addr); err != nil {
 		log.Fatal(err)
 	}
@@ -62,6 +77,8 @@ func loadConfig() serverConfig {
 	rFlag := &cli.BoolFlag{Val: defaultRestore}
 	dFlag := &cli.StringFlag{Val: defaultDSN}
 	kFlag := &cli.StringFlag{Val: defaultKey}
+	afFlag := &cli.StringFlag{Val: defaultAuditFile}
+	auFlag := &cli.StringFlag{Val: defaultAuditURL}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
@@ -69,52 +86,71 @@ func loadConfig() serverConfig {
 	flag.Var(rFlag, "r", "Restore from file on start")
 	flag.Var(dFlag, "d", "Database DSN")
 	flag.Var(kFlag, "k", "Signing key")
+	flag.Var(afFlag, "audit-file", "Audit log file path")
+	flag.Var(auFlag, "audit-url", "Audit receiver URL")
 	flag.Parse()
 
-	addr := cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr)
-	storeInterval := cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval)
-	filePath := cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath)
-	restore := cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore)
-	dsn := cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN)
-	key := cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)
-
-	key = cli.NormalizeKey(key)
-
 	return serverConfig{
-		Addr:          addr,
-		StoreInterval: storeInterval,
-		FilePath:      filePath,
-		Restore:       restore,
-		DSN:           dsn,
-		Key:           key,
+		Addr:          cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr),
+		StoreInterval: cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval),
+		FilePath:      cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath),
+		Restore:       cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore),
+		DSN:           cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN),
+		Key:           cli.NormalizeKey(cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)),
+		AuditFile:     cli.PickString("AUDIT_FILE", afFlag.Val, afFlag.IsSet, defaultAuditFile),
+		AuditURL:      cli.PickString("AUDIT_URL", auFlag.Val, auFlag.IsSet, defaultAuditURL),
 	}
 }
 
-func initStorage(cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
+func initStorage(ctx context.Context, cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
 	if strings.TrimSpace(cfg.DSN) != "" {
 		db, err := openDB(cfg.DSN)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
 		if err := applyMigrations(db); err != nil {
 			_ = db.Close()
 			return nil, nil, nil, err
 		}
-		st := storage.NewPostgresStorage(db)
-		return st, db, func() { _ = db.Close() }, nil
+
+		return storage.NewPostgresStorage(db), db, func() { _ = db.Close() }, nil
 	}
 
 	if strings.TrimSpace(cfg.FilePath) != "" {
-		fs := storage.NewFileStorage(cfg.FilePath, cfg.StoreInterval == 0)
+		fileStorage := storage.NewFileStorage(cfg.FilePath, cfg.StoreInterval == 0)
 
 		if cfg.Restore {
-			if err := fs.Restore(); err != nil {
+			if err := fileStorage.Restore(ctx); err != nil {
 				return nil, nil, nil, err
 			}
 		}
 
-		stop := startPeriodicSave(fs, cfg.StoreInterval)
-		return fs, nil, stop, nil
+		var stop func()
+
+		if cfg.StoreInterval > 0 {
+			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+			stopCh := make(chan struct{})
+
+			go func() {
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-stopCh:
+						return
+					case <-ticker.C:
+						if err := fileStorage.Save(context.Background()); err != nil {
+							slog.Error("save metrics failed", "error", err)
+						}
+					}
+				}
+			}()
+
+			stop = func() { close(stopCh) }
+		}
+
+		return fileStorage, nil, stop, nil
 	}
 
 	return storage.NewMemStorage(), nil, nil, nil
@@ -125,10 +161,12 @@ func openDB(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+
 	return db, nil
 }
 
@@ -137,40 +175,34 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+
 	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
 	if err != nil {
 		return err
 	}
+
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {
 		return err
 	}
+
 	return nil
 }
 
-func startPeriodicSave(fs *storage.FileStorage, interval int) func() {
-	if interval <= 0 {
+func initAuditor(cfg serverConfig) *audit.Broadcaster {
+	if strings.TrimSpace(cfg.AuditFile) == "" && strings.TrimSpace(cfg.AuditURL) == "" {
 		return nil
 	}
 
-	ticker := timeNewTickerSeconds(interval)
-	stopCh := make(chan struct{})
+	broadcaster := audit.NewBroadcaster()
 
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopCh:
-				return
-			case <-ticker.C:
-				_ = fs.Save()
-			}
-		}
-	}()
+	if strings.TrimSpace(cfg.AuditFile) != "" {
+		broadcaster.Subscribe(audit.NewFileObserver(cfg.AuditFile))
+	}
 
-	return func() { close(stopCh) }
-}
+	if strings.TrimSpace(cfg.AuditURL) != "" {
+		broadcaster.Subscribe(audit.NewHTTPObserver(cfg.AuditURL))
+	}
 
-func timeNewTickerSeconds(sec int) *time.Ticker {
-	return time.NewTicker(time.Duration(sec) * time.Second)
+	return broadcaster
 }
