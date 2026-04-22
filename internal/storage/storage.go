@@ -1,18 +1,25 @@
 package storage
 
-import "sync"
+import (
+	"context"
+	"sync"
 
-// Storage — интерфейс хранилища метрик
+	models "github.com/LemuriiL/MetricsAllerts/internal/model"
+)
+
 type Storage interface {
-	SetGauge(name string, value float64)
-	GetGauge(name string) (float64, bool)
-	SetCounter(name string, value int64)
-	GetCounter(name string) (int64, bool)
-	GetAllGauges() map[string]float64
-	GetAllCounters() map[string]int64
+	SetGauge(ctx context.Context, name string, value float64) error
+	GetGauge(ctx context.Context, name string) (float64, bool, error)
+	SetCounter(ctx context.Context, name string, value int64) error
+	GetCounter(ctx context.Context, name string) (int64, bool, error)
+	GetAllGauges(ctx context.Context) (map[string]float64, error)
+	GetAllCounters(ctx context.Context) (map[string]int64, error)
 }
 
-// MemStorage хранит метрики в памяти
+type BatchUpdater interface {
+	UpdateBatch(ctx context.Context, metrics []models.Metrics) error
+}
+
 type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
@@ -26,20 +33,41 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
-func (s *MemStorage) SetGauge(name string, value float64) {
+func (s *MemStorage) SetGauge(ctx context.Context, name string, value float64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.gauges[name] = value
+	return nil
 }
 
-func (s *MemStorage) GetGauge(name string) (float64, bool) {
+func (s *MemStorage) GetGauge(ctx context.Context, name string) (float64, bool, error) {
+	select {
+	case <-ctx.Done():
+		return 0, false, ctx.Err()
+	default:
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	val, ok := s.gauges[name]
-	return val, ok
+	return val, ok, nil
 }
 
-func (s *MemStorage) SetCounter(name string, value int64) {
+func (s *MemStorage) SetCounter(ctx context.Context, name string, value int64) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -47,17 +75,31 @@ func (s *MemStorage) SetCounter(name string, value int64) {
 		value += old
 	}
 	s.counters[name] = value
+
+	return nil
 }
 
-func (s *MemStorage) GetCounter(name string) (int64, bool) {
+func (s *MemStorage) GetCounter(ctx context.Context, name string) (int64, bool, error) {
+	select {
+	case <-ctx.Done():
+		return 0, false, ctx.Err()
+	default:
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	val, ok := s.counters[name]
-	return val, ok
+	return val, ok, nil
 }
 
-func (s *MemStorage) GetAllGauges() map[string]float64 {
+func (s *MemStorage) GetAllGauges(ctx context.Context) (map[string]float64, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -65,10 +107,17 @@ func (s *MemStorage) GetAllGauges() map[string]float64 {
 	for k, v := range s.gauges {
 		res[k] = v
 	}
-	return res
+
+	return res, nil
 }
 
-func (s *MemStorage) GetAllCounters() map[string]int64 {
+func (s *MemStorage) GetAllCounters(ctx context.Context) (map[string]int64, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -76,5 +125,6 @@ func (s *MemStorage) GetAllCounters() map[string]int64 {
 	for k, v := range s.counters {
 		res[k] = v
 	}
-	return res
+
+	return res, nil
 }
