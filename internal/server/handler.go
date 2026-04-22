@@ -16,24 +16,29 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Handler отвечает за обработку http запросов с метриками
 type Handler struct {
 	storage storage.Storage
 	db      *sql.DB
 	auditor *audit.Broadcaster
 }
 
+// NewHandler создает handler без базы
 func NewHandler(s storage.Storage) *Handler {
 	return &Handler{storage: s}
 }
 
+// NewHandlerWithDB создает handler с подключенной базой
 func NewHandlerWithDB(s storage.Storage, db *sql.DB) *Handler {
 	return &Handler{storage: s, db: db}
 }
 
+// SetAuditor подключает аудит событий для handler
 func (h *Handler) SetAuditor(a *audit.Broadcaster) {
 	h.auditor = a
 }
 
+// UpdateMetric обновляет метрику через url параметры
 func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	metricType := vars["type"]
@@ -71,6 +76,7 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// GetMetricValue возвращает значение метрики
 func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	metricType := vars["type"]
@@ -97,6 +103,7 @@ func (h *Handler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// GetAllMetrics возвращает все метрики в html
 func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	gauges := h.storage.GetAllGauges()
 	counters := h.storage.GetAllCounters()
@@ -114,6 +121,7 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "</ul>")
 }
 
+// Ping проверяет доступность базы данных
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		w.WriteHeader(http.StatusOK)
