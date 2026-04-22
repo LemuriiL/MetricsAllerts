@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/sirupsen/logrus"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cli"
@@ -43,12 +44,14 @@ type serverConfig struct {
 
 func main() {
 	runPPROF()
+
 	cfg := loadConfig()
 
-	st, db, closeFn, err := initStorage(cfg)
+	st, db, closeFn, err := initStorage(context.Background(), cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	if closeFn != nil {
 		defer closeFn()
 	}
@@ -60,7 +63,8 @@ func main() {
 		srv.SetAuditor(auditor)
 	}
 
-	logrus.Infof("Starting server on %s", cfg.Addr)
+	slog.Info("starting server", "addr", cfg.Addr)
+
 	if err := srv.Run(cfg.Addr); err != nil {
 		log.Fatal(err)
 	}
@@ -98,51 +102,55 @@ func loadConfig() serverConfig {
 	}
 }
 
-func initStorage(cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
+func initStorage(ctx context.Context, cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
 	if strings.TrimSpace(cfg.DSN) != "" {
 		db, err := openDB(cfg.DSN)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
 		if err := applyMigrations(db); err != nil {
 			_ = db.Close()
 			return nil, nil, nil, err
 		}
+
 		return storage.NewPostgresStorage(db), db, func() { _ = db.Close() }, nil
 	}
 
 	if strings.TrimSpace(cfg.FilePath) != "" {
-		fs := storage.NewFileStorage(cfg.FilePath, cfg.StoreInterval == 0)
+		fileStorage := storage.NewFileStorage(cfg.FilePath, cfg.StoreInterval == 0)
 
 		if cfg.Restore {
-			if err := fs.Restore(); err != nil {
+			if err := fileStorage.Restore(ctx); err != nil {
 				return nil, nil, nil, err
 			}
 		}
 
 		var stop func()
+
 		if cfg.StoreInterval > 0 {
 			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
 			stopCh := make(chan struct{})
 
 			go func() {
 				defer ticker.Stop()
+
 				for {
 					select {
 					case <-stopCh:
 						return
 					case <-ticker.C:
-						_ = fs.Save()
+						if err := fileStorage.Save(context.Background()); err != nil {
+							slog.Error("save metrics failed", "error", err)
+						}
 					}
 				}
 			}()
 
-			stop = func() {
-				close(stopCh)
-			}
+			stop = func() { close(stopCh) }
 		}
 
-		return fs, nil, stop, nil
+		return fileStorage, nil, stop, nil
 	}
 
 	return storage.NewMemStorage(), nil, nil, nil
@@ -153,10 +161,12 @@ func openDB(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+
 	return db, nil
 }
 
@@ -175,6 +185,7 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil && err != migrate.ErrNoChange {
 		return err
 	}
+
 	return nil
 }
 
@@ -183,15 +194,15 @@ func initAuditor(cfg serverConfig) *audit.Broadcaster {
 		return nil
 	}
 
-	b := audit.NewBroadcaster()
+	broadcaster := audit.NewBroadcaster()
 
 	if strings.TrimSpace(cfg.AuditFile) != "" {
-		b.Subscribe(audit.NewFileObserver(cfg.AuditFile))
+		broadcaster.Subscribe(audit.NewFileObserver(cfg.AuditFile))
 	}
 
 	if strings.TrimSpace(cfg.AuditURL) != "" {
-		b.Subscribe(audit.NewHTTPObserver(cfg.AuditURL))
+		broadcaster.Subscribe(audit.NewHTTPObserver(cfg.AuditURL))
 	}
 
-	return b
+	return broadcaster
 }

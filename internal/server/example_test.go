@@ -2,11 +2,10 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-
-	"github.com/gorilla/mux"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
@@ -28,6 +27,7 @@ func ExampleHandler_UpdateMetricJSON() {
 }
 
 func ExampleHandler_UpdateMetricsJSON() {
+	ctx := context.Background()
 	st := storage.NewMemStorage()
 	h := NewHandler(st)
 
@@ -38,8 +38,8 @@ func ExampleHandler_UpdateMetricsJSON() {
 
 	h.UpdateMetricsJSON(w, req)
 
-	gauge, _ := st.GetGauge("Alloc")
-	counter, _ := st.GetCounter("PollCount")
+	gauge, _, _ := st.GetGauge(ctx, "Alloc")
+	counter, _, _ := st.GetCounter(ctx, "PollCount")
 
 	fmt.Println(w.Code)
 	fmt.Printf("%.2f\n", gauge)
@@ -47,8 +47,9 @@ func ExampleHandler_UpdateMetricsJSON() {
 }
 
 func ExampleHandler_GetMetricJSON() {
+	ctx := context.Background()
 	st := storage.NewMemStorage()
-	st.SetGauge("Alloc", 123.45)
+	_ = st.SetGauge(ctx, "Alloc", 123.45)
 	h := NewHandler(st)
 
 	body := []byte(`{"id":"Alloc","type":"gauge"}`)
@@ -63,35 +64,31 @@ func ExampleHandler_GetMetricJSON() {
 }
 
 func ExampleHandler_UpdateMetric() {
+	ctx := context.Background()
 	st := storage.NewMemStorage()
 	h := NewHandler(st)
-
-	r := mux.NewRouter()
-	r.HandleFunc("/update/{type}/{name}/{value}", h.UpdateMetric).Methods(http.MethodPost)
 
 	req := httptest.NewRequest(http.MethodPost, "/update/gauge/Alloc/123.45", nil)
 	w := httptest.NewRecorder()
 
-	r.ServeHTTP(w, req)
+	h.UpdateMetric(w, req)
 
-	value, _ := st.GetGauge("Alloc")
+	value, _, _ := st.GetGauge(ctx, "Alloc")
 
 	fmt.Println(w.Code)
 	fmt.Printf("%.2f\n", value)
 }
 
 func ExampleHandler_GetMetricValue() {
+	ctx := context.Background()
 	st := storage.NewMemStorage()
-	st.SetCounter("PollCount", 10)
+	_ = st.SetCounter(ctx, "PollCount", 10)
 	h := NewHandler(st)
-
-	r := mux.NewRouter()
-	r.HandleFunc("/value/{type}/{name}", h.GetMetricValue).Methods(http.MethodGet)
 
 	req := httptest.NewRequest(http.MethodGet, "/value/counter/PollCount", nil)
 	w := httptest.NewRecorder()
 
-	r.ServeHTTP(w, req)
+	h.GetMetricValue(w, req)
 
 	fmt.Println(w.Code)
 	fmt.Println(w.Body.String())
@@ -99,6 +96,7 @@ func ExampleHandler_GetMetricValue() {
 
 func ExampleMetrics() {
 	value := 123.45
+
 	m := models.Metrics{
 		ID:    "Alloc",
 		MType: models.Gauge,
