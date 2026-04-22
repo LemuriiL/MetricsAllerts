@@ -20,6 +20,8 @@ const (
 
 // main точка входа агента
 func main() {
+	printBuildInfo()
+
 	aFlag := &cli.StringFlag{Val: defaultAddr}
 	rFlag := &cli.IntFlag{Val: defaultReportInterval}
 	pFlag := &cli.IntFlag{Val: defaultPollInterval}

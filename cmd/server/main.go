@@ -44,7 +44,7 @@ type serverConfig struct {
 
 func main() {
 	runPPROF()
-
+	printBuildInfo()
 	cfg := loadConfig()
 
 	st, db, closeFn, err := initStorage(context.Background(), cfg)
