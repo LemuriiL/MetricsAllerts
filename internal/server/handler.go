@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 	"github.com/gorilla/mux"
 )
@@ -16,6 +19,7 @@ import (
 type Handler struct {
 	storage storage.Storage
 	db      *sql.DB
+	auditor *audit.Broadcaster
 }
 
 func NewHandler(s storage.Storage) *Handler {
@@ -24,6 +28,10 @@ func NewHandler(s storage.Storage) *Handler {
 
 func NewHandlerWithDB(s storage.Storage, db *sql.DB) *Handler {
 	return &Handler{storage: s, db: db}
+}
+
+func (h *Handler) SetAuditor(a *audit.Broadcaster) {
+	h.auditor = a
 }
 
 func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +55,6 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.SetGauge(metricName, val)
-
 	case "counter":
 		val, err := strconv.ParseInt(metricValueStr, 10, 64)
 		if err != nil {
@@ -55,12 +62,12 @@ func (h *Handler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.SetCounter(metricName, val)
-
 	default:
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
+	h.emitAudit(r, []string{metricName})
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -123,4 +130,36 @@ func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) emitAudit(r *http.Request, metrics []string) {
+	if h.auditor == nil || len(metrics) == 0 {
+		return
+	}
+
+	h.auditor.Publish(r.Context(), audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   append([]string(nil), metrics...),
+		IPAddress: requestIP(r),
+	})
+}
+
+func requestIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+
+	if ip := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); ip != "" {
+		parts := strings.Split(ip, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
 }

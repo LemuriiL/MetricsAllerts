@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 	"github.com/gorilla/mux"
 )
@@ -18,6 +19,10 @@ func New(storage storage.Storage, db *sql.DB, key string) *Server {
 		handler: NewHandlerWithDB(storage, db),
 		key:     key,
 	}
+}
+
+func (s *Server) SetAuditor(a *audit.Broadcaster) {
+	s.handler.SetAuditor(a)
 }
 
 func (s *Server) Run(addr string) error {
