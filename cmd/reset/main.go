@@ -52,12 +52,58 @@ func run(root string) error {
 }
 
 func processDir(dir string) error {
-	entries, err := os.ReadDir(dir)
+	files, err := collectGoFiles(dir)
 	if err != nil {
 		return err
 	}
 
-	hasGoFiles := false
+	if len(files) == 0 {
+		return nil
+	}
+
+	fset := token.NewFileSet()
+	parsedFiles := make([]*ast.File, 0, len(files))
+	pkgName := ""
+
+	for _, filePath := range files {
+		file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+
+		if pkgName == "" {
+			pkgName = file.Name.Name
+		}
+
+		if file.Name.Name != pkgName {
+			continue
+		}
+
+		parsedFiles = append(parsedFiles, file)
+	}
+
+	structs := collectResetStructs(parsedFiles)
+	if len(structs) == 0 {
+		return nil
+	}
+
+	src, err := generateFile(fset, pkgName, structs)
+	if err != nil {
+		return err
+	}
+
+	out := filepath.Join(dir, "reset.gen.go")
+	return os.WriteFile(out, src, 0o644)
+}
+
+func collectGoFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make([]string, 0)
+
 	for _, entry := range entries {
 		name := entry.Name()
 
@@ -65,55 +111,28 @@ func processDir(dir string) error {
 			continue
 		}
 
-		if strings.HasSuffix(name, ".go") &&
-			!strings.HasSuffix(name, "_test.go") &&
-			name != "reset.gen.go" {
-			hasGoFiles = true
-			break
-		}
-	}
-
-	if !hasGoFiles {
-		return nil
-	}
-
-	fset := token.NewFileSet()
-
-	pkgs, err := parser.ParseDir(fset, dir, func(info os.FileInfo) bool {
-		name := info.Name()
-
-		return strings.HasSuffix(name, ".go") &&
-			!strings.HasSuffix(name, "_test.go") &&
-			name != "reset.gen.go"
-	}, parser.ParseComments)
-	if err != nil {
-		return err
-	}
-
-	for _, pkg := range pkgs {
-		structs := collectResetStructs(pkg)
-		if len(structs) == 0 {
+		if !strings.HasSuffix(name, ".go") {
 			continue
 		}
 
-		src, err := generateFile(fset, pkg.Name, structs)
-		if err != nil {
-			return err
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
 
-		out := filepath.Join(dir, "reset.gen.go")
-		if err := os.WriteFile(out, src, 0o644); err != nil {
-			return err
+		if name == "reset.gen.go" {
+			continue
 		}
+
+		files = append(files, filepath.Join(dir, name))
 	}
 
-	return nil
+	return files, nil
 }
 
-func collectResetStructs(pkg *ast.Package) []resetStruct {
+func collectResetStructs(files []*ast.File) []resetStruct {
 	var result []resetStruct
 
-	for _, file := range pkg.Files {
+	for _, file := range files {
 		for _, decl := range file.Decls {
 			genDecl, ok := decl.(*ast.GenDecl)
 			if !ok || genDecl.Tok != token.TYPE {
@@ -202,12 +221,7 @@ func generateFile(fset *token.FileSet, pkgName string, structs []resetStruct) ([
 		fmt.Fprintln(&out)
 	}
 
-	formatted, err := format.Source(out.Bytes())
-	if err != nil {
-		return nil, err
-	}
-
-	return formatted, nil
+	return format.Source(out.Bytes())
 }
 
 func writeResetStatement(out *bytes.Buffer, fset *token.FileSet, target string, expr ast.Expr) {
