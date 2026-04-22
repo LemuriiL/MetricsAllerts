@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -10,9 +9,7 @@ import (
 	"strings"
 )
 
-type ctxKey int
-
-const signedReqKey ctxKey = 1
+const verifiedHashHeader = "X-Internal-Hash-Verified"
 
 func getHashHeader(r *http.Request) string {
 	v := strings.TrimSpace(r.Header.Get("HashSHA256"))
@@ -51,12 +48,13 @@ func verifyHashMiddleware(key string) func(http.Handler) http.Handler {
 			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), signedReqKey, true)))
+			r.Header.Set(verifiedHashHeader, "1")
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }
 
 func isRequestSigned(r *http.Request) bool {
-	v, _ := r.Context().Value(signedReqKey).(bool)
-	return v
+	return r.Header.Get(verifiedHashHeader) == "1"
 }
