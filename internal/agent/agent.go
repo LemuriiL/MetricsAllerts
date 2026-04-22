@@ -8,6 +8,7 @@ import (
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
+// Agent собирает метрики и отправляет их на сервер
 type Agent struct {
 	collector      *Collector
 	sender         *Sender
@@ -23,10 +24,12 @@ type sendJob struct {
 	metrics []models.Metrics
 }
 
+// NewAgent создает агента без подписи
 func NewAgent(serverAddr string, pollInterval, reportInterval time.Duration) *Agent {
 	return NewAgentWithKeyAndLimit(serverAddr, pollInterval, reportInterval, "", 1)
 }
 
+// NewAgentWithKey создает агента с подписью запросов
 func NewAgentWithKey(serverAddr string, pollInterval, reportInterval time.Duration, key string) *Agent {
 	return NewAgentWithKeyAndLimit(serverAddr, pollInterval, reportInterval, key, 1)
 }
@@ -45,6 +48,7 @@ func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval tim
 	}
 }
 
+// Stop останавливает агента
 func (a *Agent) Stop() {
 	select {
 	case <-a.stopCh:
@@ -54,6 +58,7 @@ func (a *Agent) Stop() {
 	a.wg.Wait()
 }
 
+// Run запускает сбор и отправку метрик
 func (a *Agent) Run() {
 	jobs := make(chan sendJob, a.rateLimit*2)
 

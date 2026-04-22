@@ -1,24 +1,18 @@
-# Binaries for programs and plugins
 *.exe~
 *.dll
 *.so
 *.dylib
+
 metrics-db.json
+audit.log
 
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Binaries
 cmd/agent/main
 cmd/server/main
 
-
-# Dependency directories (remove the comment below to include it)
 vendor/
 
-# IDEs directories
 .idea
 .vscode

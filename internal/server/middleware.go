@@ -1,10 +1,9 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 type loggingResponseWriter struct {
@@ -22,8 +21,10 @@ func (w *loggingResponseWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
+
 	n, err := w.ResponseWriter.Write(b)
 	w.size += n
+
 	return n, err
 }
 
@@ -32,22 +33,20 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		lw := &loggingResponseWriter{ResponseWriter: w}
-
 		next.ServeHTTP(lw, r)
-
-		duration := time.Since(start)
 
 		status := lw.status
 		if status == 0 {
 			status = http.StatusOK
 		}
 
-		logrus.WithFields(logrus.Fields{
-			"uri":      r.RequestURI,
-			"method":   r.Method,
-			"duration": duration.String(),
-			"status":   status,
-			"size":     lw.size,
-		}).Info("request handled")
+		slog.Info(
+			"request handled",
+			"uri", r.RequestURI,
+			"method", r.Method,
+			"duration", time.Since(start).String(),
+			"status", status,
+			"size", lw.size,
+		)
 	})
 }

@@ -1,12 +1,13 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 
-	"github.com/LemuriiL/MetricsAllerts/internal/model"
+	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
 type FileStorage struct {
@@ -24,42 +25,65 @@ func NewFileStorage(path string, syncWrite bool) *FileStorage {
 	}
 }
 
-func (s *FileStorage) SetGauge(name string, value float64) {
-	s.base.SetGauge(name, value)
-	if s.syncWrite {
-		s.Save()
+func (s *FileStorage) SetGauge(ctx context.Context, name string, value float64) error {
+	if err := s.base.SetGauge(ctx, name, value); err != nil {
+		return err
 	}
-}
 
-func (s *FileStorage) GetGauge(name string) (float64, bool) {
-	return s.base.GetGauge(name)
-}
-
-func (s *FileStorage) SetCounter(name string, value int64) {
-	s.base.SetCounter(name, value)
 	if s.syncWrite {
-		s.Save()
+		return s.Save(ctx)
 	}
+
+	return nil
 }
 
-func (s *FileStorage) GetCounter(name string) (int64, bool) {
-	return s.base.GetCounter(name)
+func (s *FileStorage) GetGauge(ctx context.Context, name string) (float64, bool, error) {
+	return s.base.GetGauge(ctx, name)
 }
 
-func (s *FileStorage) GetAllGauges() map[string]float64 {
-	return s.base.GetAllGauges()
+func (s *FileStorage) SetCounter(ctx context.Context, name string, value int64) error {
+	if err := s.base.SetCounter(ctx, name, value); err != nil {
+		return err
+	}
+
+	if s.syncWrite {
+		return s.Save(ctx)
+	}
+
+	return nil
 }
 
-func (s *FileStorage) GetAllCounters() map[string]int64 {
-	return s.base.GetAllCounters()
+func (s *FileStorage) GetCounter(ctx context.Context, name string) (int64, bool, error) {
+	return s.base.GetCounter(ctx, name)
 }
 
-func (s *FileStorage) Save() error {
+func (s *FileStorage) GetAllGauges(ctx context.Context) (map[string]float64, error) {
+	return s.base.GetAllGauges(ctx)
+}
+
+func (s *FileStorage) GetAllCounters(ctx context.Context) (map[string]int64, error) {
+	return s.base.GetAllCounters(ctx)
+}
+
+func (s *FileStorage) Save(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	gauges := s.base.GetAllGauges()
-	counters := s.base.GetAllCounters()
+	gauges, err := s.base.GetAllGauges(ctx)
+	if err != nil {
+		return err
+	}
+
+	counters, err := s.base.GetAllCounters(ctx)
+	if err != nil {
+		return err
+	}
 
 	res := make([]models.Metrics, 0, len(gauges)+len(counters))
 
@@ -73,11 +97,11 @@ func (s *FileStorage) Save() error {
 	}
 
 	for name, v := range counters {
-		d := v
+		delta := v
 		res = append(res, models.Metrics{
 			ID:    name,
 			MType: models.Counter,
-			Delta: &d,
+			Delta: &delta,
 		})
 	}
 
@@ -101,7 +125,13 @@ func (s *FileStorage) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-func (s *FileStorage) Restore() error {
+func (s *FileStorage) Restore(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -110,6 +140,7 @@ func (s *FileStorage) Restore() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+
 		return err
 	}
 
@@ -120,19 +151,26 @@ func (s *FileStorage) Restore() error {
 
 	prev := s.syncWrite
 	s.syncWrite = false
-	for _, m := range items {
-		switch m.MType {
+
+	for _, metric := range items {
+		switch metric.MType {
 		case models.Gauge:
-			if m.Value != nil {
-				s.base.SetGauge(m.ID, *m.Value)
+			if metric.Value != nil {
+				if err := s.base.SetGauge(ctx, metric.ID, *metric.Value); err != nil {
+					s.syncWrite = prev
+					return err
+				}
 			}
 		case models.Counter:
-			if m.Delta != nil {
-				s.base.SetCounter(m.ID, *m.Delta)
+			if metric.Delta != nil {
+				if err := s.base.SetCounter(ctx, metric.ID, *metric.Delta); err != nil {
+					s.syncWrite = prev
+					return err
+				}
 			}
 		}
 	}
-	s.syncWrite = prev
 
+	s.syncWrite = prev
 	return nil
 }

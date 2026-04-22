@@ -18,6 +18,7 @@ const (
 	defaultRateLimit      = 1
 )
 
+// main точка входа агента
 func main() {
 	aFlag := &cli.StringFlag{Val: defaultAddr}
 	rFlag := &cli.IntFlag{Val: defaultReportInterval}

@@ -12,6 +12,7 @@ const (
 // и соответственно не кодировать в структуру.
 
 // generate:reset
+// Metrics — это модель метрики, которая приходит и уходит по api
 type Metrics struct {
 	ID    string   `json:"id"`
 	MType string   `json:"type"`

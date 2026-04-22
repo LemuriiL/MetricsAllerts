@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"net/http"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
-	"github.com/gorilla/mux"
 )
 
 type Server struct {
@@ -20,32 +20,33 @@ func New(storage storage.Storage, db *sql.DB, key string) *Server {
 	}
 }
 
-func (s *Server) Run(addr string) error {
-	r := mux.NewRouter()
-	r.SkipClean(true)
+func (s *Server) SetAuditor(a *audit.Broadcaster) {
+	s.handler.SetAuditor(a)
+}
 
-	r.Use(loggingMiddleware)
-	r.Use(gzipMiddleware)
+func (s *Server) Run(addr string) error {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /ping", s.handler.Ping)
+	mux.HandleFunc("POST /update/{type}/{name}/{value}", s.handler.UpdateMetric)
+	mux.HandleFunc("GET /value/{type}/{name}", s.handler.GetMetricValue)
+	mux.HandleFunc("GET /", s.handler.GetAllMetrics)
+	mux.HandleFunc("POST /update", s.handler.UpdateMetricJSON)
+	mux.HandleFunc("POST /update/", s.handler.UpdateMetricJSON)
+	mux.HandleFunc("POST /updates", s.handler.UpdateMetricsJSON)
+	mux.HandleFunc("POST /updates/", s.handler.UpdateMetricsJSON)
+	mux.HandleFunc("POST /value", s.handler.GetMetricJSON)
+	mux.HandleFunc("POST /value/", s.handler.GetMetricJSON)
+
+	var h http.Handler = mux
 
 	if s.key != "" {
-		r.Use(verifyHashMiddleware(s.key))
-		r.Use(signHashMiddleware(s.key))
+		h = verifyHashMiddleware(s.key)(h)
+		h = signHashMiddleware(s.key)(h)
 	}
 
-	r.HandleFunc("/ping", s.handler.Ping).Methods(http.MethodGet)
+	h = gzipMiddleware(h)
+	h = loggingMiddleware(h)
 
-	r.HandleFunc("/update/{type}/{name}/{value}", s.handler.UpdateMetric).Methods(http.MethodPost)
-	r.HandleFunc("/value/{type}/{name}", s.handler.GetMetricValue).Methods(http.MethodGet)
-	r.HandleFunc("/", s.handler.GetAllMetrics).Methods(http.MethodGet)
-
-	r.HandleFunc("/update", s.handler.UpdateMetricJSON).Methods(http.MethodPost)
-	r.HandleFunc("/update/", s.handler.UpdateMetricJSON).Methods(http.MethodPost)
-
-	r.HandleFunc("/updates", s.handler.UpdateMetricsJSON).Methods(http.MethodPost)
-	r.HandleFunc("/updates/", s.handler.UpdateMetricsJSON).Methods(http.MethodPost)
-
-	r.HandleFunc("/value", s.handler.GetMetricJSON).Methods(http.MethodPost)
-	r.HandleFunc("/value/", s.handler.GetMetricJSON).Methods(http.MethodPost)
-
-	return http.ListenAndServe(addr, r)
+	return http.ListenAndServe(addr, h)
 }
