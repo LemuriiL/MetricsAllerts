@@ -9,13 +9,26 @@ import (
 
 const analyzerName = "nofatalpanic"
 
+type forbiddenCall struct {
+	pkg  string
+	name string
+	msg  string
+}
+
+var forbiddenCalls = []forbiddenCall{
+	{"log", "Fatal", "do not use log.Fatal outside main function of main package"},
+	{"log", "Fatalf", "do not use log.Fatalf outside main function of main package"},
+	{"log", "Fatalln", "do not use log.Fatalln outside main function of main package"},
+	{"os", "Exit", "do not use os.Exit outside main function of main package"},
+}
+
 var noFatalPanicAnalyzer = &analysis.Analyzer{
 	Name: analyzerName,
 	Doc:  "checks panic, log.Fatal and os.Exit usage",
 	Run:  run,
 }
 
-func run(pass *analysis.Pass) (interface{}, error) {
+func run(pass *analysis.Pass) (any, error) {
 	for _, file := range pass.Files {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -52,24 +65,11 @@ func checkCall(pass *analysis.Pass, call *ast.CallExpr, fn *ast.FuncDecl) {
 		return
 	}
 
-	if isPackageFunctionCall(pass, call, "log", "Fatal") {
-		pass.Reportf(call.Pos(), "do not use log.Fatal outside main function of main package")
-		return
-	}
-
-	if isPackageFunctionCall(pass, call, "log", "Fatalf") {
-		pass.Reportf(call.Pos(), "do not use log.Fatalf outside main function of main package")
-		return
-	}
-
-	if isPackageFunctionCall(pass, call, "log", "Fatalln") {
-		pass.Reportf(call.Pos(), "do not use log.Fatalln outside main function of main package")
-		return
-	}
-
-	if isPackageFunctionCall(pass, call, "os", "Exit") {
-		pass.Reportf(call.Pos(), "do not use os.Exit outside main function of main package")
-		return
+	for _, item := range forbiddenCalls {
+		if isPackageFunctionCall(pass, call, item.pkg, item.name) {
+			pass.Reportf(call.Pos(), "%s", item.msg)
+			return
+		}
 	}
 }
 

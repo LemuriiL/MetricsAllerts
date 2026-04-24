@@ -2,20 +2,12 @@ package main
 
 import "fmt"
 
-var buildVersion string
-var buildDate string
-var buildCommit string
+var buildVersion = "N/A"
+var buildDate = "N/A"
+var buildCommit = "N/A"
 
 func printBuildInfo() {
-	fmt.Printf("Build version: %s\n", valueOrNA(buildVersion))
-	fmt.Printf("Build date: %s\n", valueOrNA(buildDate))
-	fmt.Printf("Build commit: %s\n", valueOrNA(buildCommit))
-}
-
-func valueOrNA(value string) string {
-	if value == "" {
-		return "N/A"
-	}
-
-	return value
+	fmt.Printf("Build version: %s\n", buildVersion)
+	fmt.Printf("Build date: %s\n", buildDate)
+	fmt.Printf("Build commit: %s\n", buildCommit)
 }
