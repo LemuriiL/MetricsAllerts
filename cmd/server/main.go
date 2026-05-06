@@ -6,6 +6,8 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 
 	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cli"
+	"github.com/LemuriiL/MetricsAllerts/internal/config"
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 )
@@ -30,6 +33,7 @@ const (
 	defaultAuditFile     = ""
 	defaultAuditURL      = ""
 	defaultCryptoKey     = ""
+	defaultConfigPath    = ""
 )
 
 type serverConfig struct {
@@ -48,7 +52,10 @@ func main() {
 	runPPROF()
 	printBuildInfo()
 
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	st, db, closeFn, err := initStorage(context.Background(), cfg)
 	if err != nil {
@@ -73,7 +80,7 @@ func main() {
 	}
 }
 
-func loadConfig() serverConfig {
+func loadConfig() (serverConfig, error) {
 	aFlag := &cli.StringFlag{Val: defaultAddr}
 	iFlag := &cli.IntFlag{Val: defaultStoreInterval}
 	fFlag := &cli.StringFlag{Val: defaultFilePath}
@@ -83,6 +90,7 @@ func loadConfig() serverConfig {
 	afFlag := &cli.StringFlag{Val: defaultAuditFile}
 	auFlag := &cli.StringFlag{Val: defaultAuditURL}
 	ckFlag := &cli.StringFlag{Val: defaultCryptoKey}
+	cFlag := &cli.StringFlag{Val: defaultConfigPath}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
@@ -93,19 +101,50 @@ func loadConfig() serverConfig {
 	flag.Var(afFlag, "audit-file", "Audit log file path")
 	flag.Var(auFlag, "audit-url", "Audit receiver URL")
 	flag.Var(ckFlag, "crypto-key", "Path to RSA private key")
+	flag.Var(cFlag, "c", "Path to JSON config")
+	flag.Var(cFlag, "config", "Path to JSON config")
 	flag.Parse()
 
-	return serverConfig{
-		Addr:          cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr),
-		StoreInterval: cli.PickInt("STORE_INTERVAL", iFlag.Val, iFlag.IsSet, defaultStoreInterval),
-		FilePath:      cli.PickString("FILE_STORAGE_PATH", fFlag.Val, fFlag.IsSet, defaultFilePath),
-		Restore:       cli.PickBool("RESTORE", rFlag.Val, rFlag.IsSet, defaultRestore),
-		DSN:           cli.PickString("DATABASE_DSN", dFlag.Val, dFlag.IsSet, defaultDSN),
-		Key:           cli.NormalizeKey(cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)),
-		AuditFile:     cli.PickString("AUDIT_FILE", afFlag.Val, afFlag.IsSet, defaultAuditFile),
-		AuditURL:      cli.PickString("AUDIT_URL", auFlag.Val, auFlag.IsSet, defaultAuditURL),
-		CryptoKey:     cli.PickString("CRYPTO_KEY", ckFlag.Val, ckFlag.IsSet, defaultCryptoKey),
+	configPath := pickString(defaultConfigPath, cFlag.Val, cFlag.IsSet, "CONFIG")
+
+	fileCfg := config.ServerFileConfig{}
+	if strings.TrimSpace(configPath) != "" {
+		loaded, err := config.LoadServerFileConfig(configPath)
+		if err != nil {
+			return serverConfig{}, err
+		}
+		fileCfg = loaded
 	}
+
+	fileStoreInterval := defaultStoreInterval
+	if strings.TrimSpace(fileCfg.StoreInterval) != "" {
+		seconds, err := parseDurationSeconds(fileCfg.StoreInterval)
+		if err != nil {
+			return serverConfig{}, err
+		}
+		fileStoreInterval = seconds
+	}
+
+	fileRestore := defaultRestore
+	if fileCfg.Restore != nil {
+		fileRestore = *fileCfg.Restore
+	}
+
+	fileStorePath := firstNonEmpty(fileCfg.StoreFile, defaultFilePath)
+
+	cfg := serverConfig{
+		Addr:          pickString(firstNonEmpty(fileCfg.Address, defaultAddr), aFlag.Val, aFlag.IsSet, "ADDRESS"),
+		StoreInterval: pickInt(fileStoreInterval, iFlag.Val, iFlag.IsSet, "STORE_INTERVAL"),
+		FilePath:      pickStringFromEnvs(fileStorePath, fFlag.Val, fFlag.IsSet, "STORE_FILE", "FILE_STORAGE_PATH"),
+		Restore:       pickBool(fileRestore, rFlag.Val, rFlag.IsSet, "RESTORE"),
+		DSN:           pickString(firstNonEmpty(fileCfg.DatabaseDSN, defaultDSN), dFlag.Val, dFlag.IsSet, "DATABASE_DSN"),
+		Key:           cli.NormalizeKey(pickString(firstNonEmpty(fileCfg.Key, defaultKey), kFlag.Val, kFlag.IsSet, "KEY")),
+		AuditFile:     pickString(firstNonEmpty(fileCfg.AuditFile, defaultAuditFile), afFlag.Val, afFlag.IsSet, "AUDIT_FILE"),
+		AuditURL:      pickString(firstNonEmpty(fileCfg.AuditURL, defaultAuditURL), auFlag.Val, auFlag.IsSet, "AUDIT_URL"),
+		CryptoKey:     pickString(firstNonEmpty(fileCfg.CryptoKey, defaultCryptoKey), ckFlag.Val, ckFlag.IsSet, "CRYPTO_KEY"),
+	}
+
+	return cfg, nil
 }
 
 func initStorage(ctx context.Context, cfg serverConfig) (storage.Storage, *sql.DB, func(), error) {
@@ -211,4 +250,71 @@ func initAuditor(cfg serverConfig) *audit.Broadcaster {
 	}
 
 	return broadcaster
+}
+
+func pickString(defaultValue, flagValue string, flagSet bool, envName string) string {
+	return pickStringFromEnvs(defaultValue, flagValue, flagSet, envName)
+}
+
+func pickStringFromEnvs(defaultValue, flagValue string, flagSet bool, envNames ...string) string {
+	for _, envName := range envNames {
+		if value, ok := os.LookupEnv(envName); ok {
+			return value
+		}
+	}
+
+	if flagSet {
+		return flagValue
+	}
+
+	return defaultValue
+}
+
+func pickInt(defaultValue, flagValue int, flagSet bool, envName string) int {
+	if value, ok := os.LookupEnv(envName); ok {
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed
+		}
+	}
+
+	if flagSet {
+		return flagValue
+	}
+
+	return defaultValue
+}
+
+func pickBool(defaultValue, flagValue bool, flagSet bool, envName string) bool {
+	if value, ok := os.LookupEnv(envName); ok {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
+	}
+
+	if flagSet {
+		return flagValue
+	}
+
+	return defaultValue
+}
+
+func parseDurationSeconds(value string) (int, error) {
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(d / time.Second), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+
+	return ""
 }
