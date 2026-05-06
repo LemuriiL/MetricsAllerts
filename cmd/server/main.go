@@ -29,6 +29,7 @@ const (
 	defaultKey           = ""
 	defaultAuditFile     = ""
 	defaultAuditURL      = ""
+	defaultCryptoKey     = ""
 )
 
 type serverConfig struct {
@@ -40,11 +41,13 @@ type serverConfig struct {
 	Key           string
 	AuditFile     string
 	AuditURL      string
+	CryptoKey     string
 }
 
 func main() {
 	runPPROF()
 	printBuildInfo()
+
 	cfg := loadConfig()
 
 	st, db, closeFn, err := initStorage(context.Background(), cfg)
@@ -56,7 +59,7 @@ func main() {
 		defer closeFn()
 	}
 
-	srv := server.New(st, db, cfg.Key)
+	srv := server.New(st, db, cfg.Key, cfg.CryptoKey)
 
 	auditor := initAuditor(cfg)
 	if auditor != nil {
@@ -79,6 +82,7 @@ func loadConfig() serverConfig {
 	kFlag := &cli.StringFlag{Val: defaultKey}
 	afFlag := &cli.StringFlag{Val: defaultAuditFile}
 	auFlag := &cli.StringFlag{Val: defaultAuditURL}
+	ckFlag := &cli.StringFlag{Val: defaultCryptoKey}
 
 	flag.Var(aFlag, "a", "HTTP server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
@@ -88,6 +92,7 @@ func loadConfig() serverConfig {
 	flag.Var(kFlag, "k", "Signing key")
 	flag.Var(afFlag, "audit-file", "Audit log file path")
 	flag.Var(auFlag, "audit-url", "Audit receiver URL")
+	flag.Var(ckFlag, "crypto-key", "Path to RSA private key")
 	flag.Parse()
 
 	return serverConfig{
@@ -99,6 +104,7 @@ func loadConfig() serverConfig {
 		Key:           cli.NormalizeKey(cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)),
 		AuditFile:     cli.PickString("AUDIT_FILE", afFlag.Val, afFlag.IsSet, defaultAuditFile),
 		AuditURL:      cli.PickString("AUDIT_URL", auFlag.Val, auFlag.IsSet, defaultAuditURL),
+		CryptoKey:     cli.PickString("CRYPTO_KEY", ckFlag.Val, ckFlag.IsSet, defaultCryptoKey),
 	}
 }
 

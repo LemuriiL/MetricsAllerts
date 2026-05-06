@@ -8,39 +8,40 @@ import (
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
-// Agent собирает метрики и отправляет их на сервер
 type Agent struct {
 	collector      *Collector
 	sender         *Sender
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	rateLimit      int
-
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 type sendJob struct {
 	metrics []models.Metrics
 }
 
-// NewAgent создает агента без подписи
 func NewAgent(serverAddr string, pollInterval, reportInterval time.Duration) *Agent {
-	return NewAgentWithKeyAndLimit(serverAddr, pollInterval, reportInterval, "", 1)
+	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, "", 1, "")
 }
 
-// NewAgentWithKey создает агента с подписью запросов
 func NewAgentWithKey(serverAddr string, pollInterval, reportInterval time.Duration, key string) *Agent {
-	return NewAgentWithKeyAndLimit(serverAddr, pollInterval, reportInterval, key, 1)
+	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, 1, "")
 }
 
 func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int) *Agent {
+	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, rateLimit, "")
+}
+
+func NewAgentWithKeyAndLimitAndCrypto(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, cryptoKeyPath string) *Agent {
 	if rateLimit <= 0 {
 		rateLimit = 1
 	}
+
 	return &Agent{
 		collector:      NewCollector(),
-		sender:         NewSenderWithKey(serverAddr, key),
+		sender:         NewSenderWithKeyAndCryptoKey(serverAddr, key, cryptoKeyPath),
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 		rateLimit:      rateLimit,
@@ -48,24 +49,25 @@ func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval tim
 	}
 }
 
-// Stop останавливает агента
 func (a *Agent) Stop() {
 	select {
 	case <-a.stopCh:
 	default:
 		close(a.stopCh)
 	}
+
 	a.wg.Wait()
 }
 
-// Run запускает сбор и отправку метрик
 func (a *Agent) Run() {
 	jobs := make(chan sendJob, a.rateLimit*2)
 
 	for i := 0; i < a.rateLimit; i++ {
 		a.wg.Add(1)
+
 		go func() {
 			defer a.wg.Done()
+
 			for {
 				select {
 				case <-a.stopCh:
@@ -74,9 +76,11 @@ func (a *Agent) Run() {
 					if !ok {
 						return
 					}
+
 					if len(job.metrics) == 0 {
 						continue
 					}
+
 					if err := a.sender.SendBatch(job.metrics); err != nil {
 						log.Printf("failed to send batch: %v", err)
 					}
@@ -86,8 +90,10 @@ func (a *Agent) Run() {
 	}
 
 	a.wg.Add(1)
+
 	go func() {
 		defer a.wg.Done()
+
 		t := time.NewTicker(a.pollInterval)
 		defer t.Stop()
 
@@ -104,8 +110,10 @@ func (a *Agent) Run() {
 	}()
 
 	a.wg.Add(1)
+
 	go func() {
 		defer a.wg.Done()
+
 		t := time.NewTicker(a.pollInterval)
 		defer t.Stop()
 
@@ -122,8 +130,10 @@ func (a *Agent) Run() {
 	}()
 
 	a.wg.Add(1)
+
 	go func() {
 		defer a.wg.Done()
+
 		t := time.NewTicker(a.reportInterval)
 		defer t.Stop()
 
@@ -133,6 +143,7 @@ func (a *Agent) Run() {
 				return
 			case <-t.C:
 				ms := a.collector.Snapshot()
+
 				select {
 				case jobs <- sendJob{metrics: ms}:
 				case <-a.stopCh:

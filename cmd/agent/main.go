@@ -16,9 +16,9 @@ const (
 	defaultPollInterval   = 2
 	defaultKey            = ""
 	defaultRateLimit      = 1
+	defaultCryptoKey      = ""
 )
 
-// main точка входа агента
 func main() {
 	printBuildInfo()
 
@@ -27,12 +27,14 @@ func main() {
 	pFlag := &cli.IntFlag{Val: defaultPollInterval}
 	kFlag := &cli.StringFlag{Val: defaultKey}
 	lFlag := &cli.IntFlag{Val: defaultRateLimit}
+	ckFlag := &cli.StringFlag{Val: defaultCryptoKey}
 
 	flag.Var(aFlag, "a", "Server address (host:port)")
 	flag.Var(rFlag, "r", "Report interval in seconds")
 	flag.Var(pFlag, "p", "Poll interval in seconds")
 	flag.Var(kFlag, "k", "Signing key")
 	flag.Var(lFlag, "l", "Rate limit (max concurrent outgoing requests)")
+	flag.Var(ckFlag, "crypto-key", "Path to RSA public key")
 	flag.Parse()
 
 	addr := cli.PickString("ADDRESS", aFlag.Val, aFlag.IsSet, defaultAddr)
@@ -40,6 +42,7 @@ func main() {
 	pollInterval := cli.PickInt("POLL_INTERVAL", pFlag.Val, pFlag.IsSet, defaultPollInterval)
 	rateLimit := cli.PickInt("RATE_LIMIT", lFlag.Val, lFlag.IsSet, defaultRateLimit)
 	key := cli.PickString("KEY", kFlag.Val, kFlag.IsSet, defaultKey)
+	cryptoKeyPath := cli.PickString("CRYPTO_KEY", ckFlag.Val, ckFlag.IsSet, defaultCryptoKey)
 
 	key = cli.NormalizeKey(key)
 	rateLimit = cli.NormalizePositiveInt(rateLimit, 1)
@@ -49,12 +52,13 @@ func main() {
 		httpAddr = "http://" + httpAddr
 	}
 
-	a := agent.NewAgentWithKeyAndLimit(
+	a := agent.NewAgentWithKeyAndLimitAndCrypto(
 		httpAddr,
 		time.Duration(pollInterval)*time.Second,
 		time.Duration(reportInterval)*time.Second,
 		key,
 		rateLimit,
+		cryptoKeyPath,
 	)
 
 	log.Printf("Starting agent, poll=%ds, report=%ds, server=%s, rateLimit=%d", pollInterval, reportInterval, addr, rateLimit)

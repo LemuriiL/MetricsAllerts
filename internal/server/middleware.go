@@ -1,9 +1,14 @@
 package server
 
 import (
+	"bytes"
+	"crypto/rsa"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 )
 
 type loggingResponseWriter struct {
@@ -49,4 +54,49 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			"size", lw.size,
 		)
 	})
+}
+
+func decryptMiddleware(privateKeyProvider func() (*rsa.PrivateKey, error)) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			encryptedKey := r.Header.Get(cryptoutil.HeaderEncryptedKey)
+			nonce := r.Header.Get(cryptoutil.HeaderNonce)
+
+			if encryptedKey == "" && nonce == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if encryptedKey == "" || nonce == "" {
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			privateKey, err := privateKeyProvider()
+			if err != nil {
+				slog.Error("failed to load private key", "error", err)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			plaintext, err := cryptoutil.Decrypt(privateKey, body, encryptedKey, nonce)
+			if err != nil {
+				slog.Error("failed to decrypt request body", "error", err)
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			_ = r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewReader(plaintext))
+			r.ContentLength = int64(len(plaintext))
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

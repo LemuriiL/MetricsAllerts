@@ -1,22 +1,31 @@
 package server
 
 import (
+	"crypto/rsa"
 	"database/sql"
 	"net/http"
+	"sync"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/audit"
+	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
 )
 
 type Server struct {
-	handler *Handler
-	key     string
+	handler       *Handler
+	key           string
+	cryptoKeyPath string
+
+	privateKey     *rsa.PrivateKey
+	privateKeyErr  error
+	privateKeyOnce sync.Once
 }
 
-func New(storage storage.Storage, db *sql.DB, key string) *Server {
+func New(storage storage.Storage, db *sql.DB, key string, cryptoKeyPath string) *Server {
 	return &Server{
-		handler: NewHandlerWithDB(storage, db),
-		key:     key,
+		handler:       NewHandlerWithDB(storage, db),
+		key:           key,
+		cryptoKeyPath: cryptoKeyPath,
 	}
 }
 
@@ -40,6 +49,10 @@ func (s *Server) Run(addr string) error {
 
 	var h http.Handler = mux
 
+	if s.cryptoKeyPath != "" {
+		h = decryptMiddleware(s.getPrivateKey)(h)
+	}
+
 	if s.key != "" {
 		h = verifyHashMiddleware(s.key)(h)
 		h = signHashMiddleware(s.key)(h)
@@ -49,4 +62,12 @@ func (s *Server) Run(addr string) error {
 	h = loggingMiddleware(h)
 
 	return http.ListenAndServe(addr, h)
+}
+
+func (s *Server) getPrivateKey() (*rsa.PrivateKey, error) {
+	s.privateKeyOnce.Do(func() {
+		s.privateKey, s.privateKeyErr = cryptoutil.LoadPrivateKey(s.cryptoKeyPath)
+	})
+
+	return s.privateKey, s.privateKeyErr
 }
