@@ -1,0 +1,51 @@
+package models
+
+func (v *Metrics) Reset() {
+	if v == nil {
+		return
+	}
+	if resetter, ok := any(&v.ID).(interface{ Reset() }); ok {
+		resetter.Reset()
+	} else {
+		{
+			var zero string
+			v.ID = zero
+		}
+	}
+	if resetter, ok := any(&v.MType).(interface{ Reset() }); ok {
+		resetter.Reset()
+	} else {
+		{
+			var zero string
+			v.MType = zero
+		}
+	}
+	if v.Delta != nil {
+		if resetter, ok := any(v.Delta).(interface{ Reset() }); ok {
+			resetter.Reset()
+		} else {
+			{
+				var zero int64
+				*v.Delta = zero
+			}
+		}
+	}
+	if v.Value != nil {
+		if resetter, ok := any(v.Value).(interface{ Reset() }); ok {
+			resetter.Reset()
+		} else {
+			{
+				var zero float64
+				*v.Value = zero
+			}
+		}
+	}
+	if resetter, ok := any(&v.Hash).(interface{ Reset() }); ok {
+		resetter.Reset()
+	} else {
+		{
+			var zero string
+			v.Hash = zero
+		}
+	}
+}
