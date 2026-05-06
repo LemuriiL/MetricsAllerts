@@ -46,6 +46,9 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 			}
 		}
 
+		stopCh := make(chan struct{})
+		var stopped bool
+
 		if cfg.StoreInterval > 0 {
 			ctx, cancel := context.WithCancel(context.Background())
 
@@ -67,7 +70,25 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 
 			prevStop := stop
 			stop = func() {
-				cancel()
+				if !stopped {
+					cancel()
+					close(stopCh)
+					stopped = true
+				}
+
+				if err := fs.Save(context.Background()); err != nil {
+					slog.Error("final save file storage", "error", err)
+				}
+
+				prevStop()
+			}
+		} else {
+			prevStop := stop
+			stop = func() {
+				if err := fs.Save(context.Background()); err != nil {
+					slog.Error("final save file storage", "error", err)
+				}
+
 				prevStop()
 			}
 		}

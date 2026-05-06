@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"log"
 	"sync"
 	"time"
@@ -14,8 +15,6 @@ type Agent struct {
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	rateLimit      int
-	stopCh         chan struct{}
-	wg             sync.WaitGroup
 }
 
 type sendJob struct {
@@ -45,54 +44,37 @@ func NewAgentWithKeyAndLimitAndCrypto(serverAddr string, pollInterval, reportInt
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 		rateLimit:      rateLimit,
-		stopCh:         make(chan struct{}),
 	}
 }
 
-func (a *Agent) Stop() {
-	select {
-	case <-a.stopCh:
-	default:
-		close(a.stopCh)
-	}
-
-	a.wg.Wait()
-}
-
-func (a *Agent) Run() {
+func (a *Agent) Run(ctx context.Context) {
 	jobs := make(chan sendJob, a.rateLimit*2)
 
+	var workersWG sync.WaitGroup
+
 	for i := 0; i < a.rateLimit; i++ {
-		a.wg.Add(1)
+		workersWG.Add(1)
 
 		go func() {
-			defer a.wg.Done()
+			defer workersWG.Done()
 
-			for {
-				select {
-				case <-a.stopCh:
-					return
-				case job, ok := <-jobs:
-					if !ok {
-						return
-					}
+			for job := range jobs {
+				if len(job.metrics) == 0 {
+					continue
+				}
 
-					if len(job.metrics) == 0 {
-						continue
-					}
-
-					if err := a.sender.SendBatch(job.metrics); err != nil {
-						log.Printf("failed to send batch: %v", err)
-					}
+				if err := a.sender.SendBatch(job.metrics); err != nil {
+					log.Printf("failed to send batch: %v", err)
 				}
 			}
 		}()
 	}
 
-	a.wg.Add(1)
+	var producersWG sync.WaitGroup
 
+	producersWG.Add(1)
 	go func() {
-		defer a.wg.Done()
+		defer producersWG.Done()
 
 		t := time.NewTicker(a.pollInterval)
 		defer t.Stop()
@@ -101,7 +83,7 @@ func (a *Agent) Run() {
 
 		for {
 			select {
-			case <-a.stopCh:
+			case <-ctx.Done():
 				return
 			case <-t.C:
 				a.collector.CollectRuntime()
@@ -109,10 +91,9 @@ func (a *Agent) Run() {
 		}
 	}()
 
-	a.wg.Add(1)
-
+	producersWG.Add(1)
 	go func() {
-		defer a.wg.Done()
+		defer producersWG.Done()
 
 		t := time.NewTicker(a.pollInterval)
 		defer t.Stop()
@@ -121,7 +102,7 @@ func (a *Agent) Run() {
 
 		for {
 			select {
-			case <-a.stopCh:
+			case <-ctx.Done():
 				return
 			case <-t.C:
 				a.collector.CollectGopsutil()
@@ -129,31 +110,42 @@ func (a *Agent) Run() {
 		}
 	}()
 
-	a.wg.Add(1)
-
+	producersWG.Add(1)
 	go func() {
-		defer a.wg.Done()
+		defer producersWG.Done()
 
 		t := time.NewTicker(a.reportInterval)
 		defer t.Stop()
 
 		for {
 			select {
-			case <-a.stopCh:
+			case <-ctx.Done():
 				return
 			case <-t.C:
 				ms := a.collector.Snapshot()
+				if len(ms) == 0 {
+					continue
+				}
 
 				select {
 				case jobs <- sendJob{metrics: ms}:
-				case <-a.stopCh:
+				case <-ctx.Done():
 					return
 				}
 			}
 		}
 	}()
 
-	<-a.stopCh
+	<-ctx.Done()
+
+	finalMetrics := a.collector.Snapshot()
+
+	producersWG.Wait()
+
+	if len(finalMetrics) > 0 {
+		jobs <- sendJob{metrics: finalMetrics}
+	}
+
 	close(jobs)
-	a.wg.Wait()
+	workersWG.Wait()
 }

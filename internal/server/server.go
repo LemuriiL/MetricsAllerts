@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"crypto/rsa"
 	"database/sql"
+	"errors"
 	"net/http"
 	"sync"
 
@@ -19,6 +21,8 @@ type Server struct {
 	privateKey     *rsa.PrivateKey
 	privateKeyErr  error
 	privateKeyOnce sync.Once
+
+	httpServer *http.Server
 }
 
 func New(storage storage.Storage, db *sql.DB, key string, cryptoKeyPath string) *Server {
@@ -61,7 +65,25 @@ func (s *Server) Run(addr string) error {
 	h = gzipMiddleware(h)
 	h = loggingMiddleware(h)
 
-	return http.ListenAndServe(addr, h)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: h,
+	}
+
+	err := s.httpServer.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer == nil {
+		return nil
+	}
+
+	return s.httpServer.Shutdown(ctx)
 }
 
 func (s *Server) getPrivateKey() (*rsa.PrivateKey, error) {

@@ -1,43 +1,43 @@
 package agent
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestCollectorCollect(t *testing.T) {
-	collector := NewCollector()
-	collector.CollectRuntime()
-	collector.CollectGopsutil()
-	metrics := collector.Snapshot()
+func TestAgentRunAndStop(t *testing.T) {
+	var requests atomic.Int32
 
-	assert.NotEmpty(t, metrics)
-}
-
-func TestAgentRun(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
+	defer ts.Close()
 
-	agent := NewAgentWithKeyAndLimit(server.URL, 50*time.Millisecond, 100*time.Millisecond, "", 2)
+	agent := NewAgent(ts.URL, 10*time.Millisecond, 10*time.Millisecond)
 
-	done := make(chan bool)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
 	go func() {
-		agent.Run()
-		done <- true
+		defer close(done)
+		agent.Run(ctx)
 	}()
 
-	time.Sleep(250 * time.Millisecond)
-	agent.Stop()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("agent did not stop")
+		t.Fatal("agent did not stop in time")
+	}
+
+	if requests.Load() == 0 {
+		t.Fatal("expected agent to send at least one request")
 	}
 }
