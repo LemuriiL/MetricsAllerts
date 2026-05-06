@@ -1,9 +1,6 @@
 package pool
 
-import (
-	"reflect"
-	"sync"
-)
+import "sync"
 
 type Resettable interface {
 	Reset()
@@ -42,24 +39,6 @@ func (p *Pool[T]) Get() T {
 }
 
 func (p *Pool[T]) Put(value T) {
-	if isNil(value) {
-		return
-	}
-
 	value.Reset()
 	p.pool.Put(value)
-}
-
-func isNil[T Resettable](value T) bool {
-	v := reflect.ValueOf(value)
-	if !v.IsValid() {
-		return true
-	}
-
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
 }
