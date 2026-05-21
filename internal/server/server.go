@@ -7,10 +7,18 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
+)
+
+const (
+	serverReadTimeout       = 5 * time.Second
+	serverReadHeaderTimeout = 5 * time.Second
+	serverWriteTimeout      = 10 * time.Second
+	serverIdleTimeout       = 30 * time.Second
 )
 
 type Server struct {
@@ -33,6 +41,12 @@ func New(storage storage.Storage, db *sql.DB, key string, cryptoKeyPath string) 
 	}
 }
 
+func NewWithoutSecurity(storage storage.Storage, db *sql.DB) *Server {
+	return &Server{
+		handler: NewHandlerWithDB(storage, db),
+	}
+}
+
 func (s *Server) SetAuditor(a *audit.Broadcaster) {
 	s.handler.SetAuditor(a)
 }
@@ -45,17 +59,10 @@ func (s *Server) Run(addr string) error {
 	mux.HandleFunc("GET /value/{type}/{name}", s.handler.GetMetricValue)
 	mux.HandleFunc("GET /", s.handler.GetAllMetrics)
 	mux.HandleFunc("POST /update", s.handler.UpdateMetricJSON)
-	mux.HandleFunc("POST /update/", s.handler.UpdateMetricJSON)
 	mux.HandleFunc("POST /updates", s.handler.UpdateMetricsJSON)
-	mux.HandleFunc("POST /updates/", s.handler.UpdateMetricsJSON)
 	mux.HandleFunc("POST /value", s.handler.GetMetricJSON)
-	mux.HandleFunc("POST /value/", s.handler.GetMetricJSON)
 
 	var h http.Handler = mux
-
-	if s.cryptoKeyPath != "" {
-		h = decryptMiddleware(s.getPrivateKey)(h)
-	}
 
 	if s.key != "" {
 		h = verifyHashMiddleware(s.key)(h)
@@ -63,11 +70,20 @@ func (s *Server) Run(addr string) error {
 	}
 
 	h = gzipMiddleware(h)
+
+	if s.cryptoKeyPath != "" {
+		h = decryptMiddleware(s.getPrivateKey)(h)
+	}
+
 	h = loggingMiddleware(h)
 
 	s.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: h,
+		Addr:              addr,
+		Handler:           h,
+		ReadTimeout:       serverReadTimeout,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		WriteTimeout:      serverWriteTimeout,
+		IdleTimeout:       serverIdleTimeout,
 	}
 
 	err := s.httpServer.ListenAndServe()

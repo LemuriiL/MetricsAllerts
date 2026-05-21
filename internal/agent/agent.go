@@ -9,6 +9,8 @@ import (
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
+const defaultMaxConn = 1
+
 type Agent struct {
 	collector      *Collector
 	sender         *Sender
@@ -22,11 +24,11 @@ type sendJob struct {
 }
 
 func NewAgent(serverAddr string, pollInterval, reportInterval time.Duration) *Agent {
-	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, "", 1, "")
+	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, "", defaultMaxConn, "")
 }
 
 func NewAgentWithKey(serverAddr string, pollInterval, reportInterval time.Duration, key string) *Agent {
-	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, 1, "")
+	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, defaultMaxConn, "")
 }
 
 func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int) *Agent {
@@ -35,7 +37,7 @@ func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval tim
 
 func NewAgentWithKeyAndLimitAndCrypto(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, cryptoKeyPath string) *Agent {
 	if rateLimit <= 0 {
-		rateLimit = 1
+		rateLimit = defaultMaxConn
 	}
 
 	return &Agent{
@@ -76,8 +78,8 @@ func (a *Agent) Run(ctx context.Context) {
 	go func() {
 		defer producersWG.Done()
 
-		t := time.NewTicker(a.pollInterval)
-		defer t.Stop()
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
 
 		a.collector.CollectRuntime()
 
@@ -85,7 +87,7 @@ func (a *Agent) Run(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-ticker.C:
 				a.collector.CollectRuntime()
 			}
 		}
@@ -95,8 +97,8 @@ func (a *Agent) Run(ctx context.Context) {
 	go func() {
 		defer producersWG.Done()
 
-		t := time.NewTicker(a.pollInterval)
-		defer t.Stop()
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
 
 		a.collector.CollectGopsutil()
 
@@ -104,7 +106,7 @@ func (a *Agent) Run(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-ticker.C:
 				a.collector.CollectGopsutil()
 			}
 		}
@@ -114,21 +116,21 @@ func (a *Agent) Run(ctx context.Context) {
 	go func() {
 		defer producersWG.Done()
 
-		t := time.NewTicker(a.reportInterval)
-		defer t.Stop()
+		ticker := time.NewTicker(a.reportInterval)
+		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
-				ms := a.collector.Snapshot()
-				if len(ms) == 0 {
+			case <-ticker.C:
+				metrics := a.collector.Snapshot()
+				if len(metrics) == 0 {
 					continue
 				}
 
 				select {
-				case jobs <- sendJob{metrics: ms}:
+				case jobs <- sendJob{metrics: metrics}:
 				case <-ctx.Done():
 					return
 				}
