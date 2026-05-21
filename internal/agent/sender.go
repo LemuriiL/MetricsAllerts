@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,9 +14,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 )
 
@@ -28,19 +31,29 @@ func (e endpointNotSupportedError) Error() string {
 }
 
 type Sender struct {
-	serverAddr string
-	key        string
-	client     *http.Client
+	serverAddr    string
+	key           string
+	cryptoKeyPath string
+	client        *http.Client
+
+	pubKey     *rsa.PublicKey
+	pubKeyErr  error
+	pubKeyOnce sync.Once
 }
 
 func NewSender(serverAddr string) *Sender {
-	return NewSenderWithKey(serverAddr, "")
+	return NewSenderWithKeyAndCryptoKey(serverAddr, "", "")
 }
 
 func NewSenderWithKey(serverAddr string, key string) *Sender {
+	return NewSenderWithKeyAndCryptoKey(serverAddr, key, "")
+}
+
+func NewSenderWithKeyAndCryptoKey(serverAddr string, key string, cryptoKeyPath string) *Sender {
 	return &Sender{
-		serverAddr: serverAddr,
-		key:        key,
+		serverAddr:    serverAddr,
+		key:           key,
+		cryptoKeyPath: cryptoKeyPath,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -87,6 +100,7 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 				return err2
 			}
 		}
+
 		return nil
 	}
 
@@ -94,7 +108,7 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 }
 
 func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) error {
-	waits := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+	waits := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	err := s.postJSON(ctx, u, body)
 	if err == nil {
@@ -107,6 +121,7 @@ func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) e
 		}
 
 		timer := time.NewTimer(waits[i])
+
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -124,17 +139,29 @@ func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) e
 }
 
 func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	if _, err := gw.Write(body); err != nil {
-		_ = gw.Close()
-		return err
-	}
-	if err := gw.Close(); err != nil {
+	payload, err := gzipBody(body)
+	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
+	reqBody := payload
+
+	encryptedKey := ""
+	nonce := ""
+
+	if s.cryptoKeyPath != "" {
+		publicKey, err := s.getPublicKey()
+		if err != nil {
+			return err
+		}
+
+		reqBody, encryptedKey, nonce, err = cryptoutil.Encrypt(publicKey, payload)
+		if err != nil {
+			return err
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
@@ -142,6 +169,11 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
+
+	if encryptedKey != "" && nonce != "" {
+		req.Header.Set(cryptoutil.HeaderEncryptedKey, encryptedKey)
+		req.Header.Set(cryptoutil.HeaderNonce, nonce)
+	}
 
 	if s.key != "" {
 		sum := sha256.Sum256(append(body, []byte(s.key)...))
@@ -164,6 +196,31 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 	}
 
 	return nil
+}
+
+func (s *Sender) getPublicKey() (*rsa.PublicKey, error) {
+	s.pubKeyOnce.Do(func() {
+		s.pubKey, s.pubKeyErr = cryptoutil.LoadPublicKey(s.cryptoKeyPath)
+	})
+
+	return s.pubKey, s.pubKeyErr
+}
+
+func gzipBody(body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+
+	gw := gzip.NewWriter(&buf)
+
+	if _, err := gw.Write(body); err != nil {
+		_ = gw.Close()
+		return nil, err
+	}
+
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func isEndpointNotSupported(err error) bool {
@@ -195,9 +252,11 @@ func isRetryableHTTPError(err error) bool {
 	}
 
 	msg := err.Error()
+
 	if bytes.Contains([]byte(msg), []byte("connection refused")) {
 		return true
 	}
+
 	if bytes.Contains([]byte(msg), []byte("EOF")) {
 		return true
 	}
