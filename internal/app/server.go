@@ -48,9 +48,9 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 			}
 		}
 
-		tickerCtx, cancel := context.WithCancel(baseCtx)
-
 		if cfg.StoreInterval > 0 {
+			tickerCtx, cancel := context.WithCancel(baseCtx)
+
 			go func() {
 				ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
 				defer ticker.Stop()
@@ -78,10 +78,13 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 				prevStop()
 			}
 		} else {
+			prevStop := stop
 			stop = func() {
 				if err := fs.Save(baseCtx); err != nil {
 					slog.Error("final save file storage", "error", err)
 				}
+
+				prevStop()
 			}
 		}
 
