@@ -18,6 +18,8 @@ import (
 type Closer func()
 
 func RunServer(cfg config.ServerConfig) (Closer, error) {
+	baseCtx := context.Background()
+
 	var (
 		st storage.Storage
 		db *sql.DB
@@ -41,13 +43,13 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 		fs := storage.NewFileStorage(filePath, cfg.StoreInterval == 0)
 
 		if cfg.Restore {
-			if err := fs.Restore(context.Background()); err != nil {
+			if err := fs.Restore(baseCtx); err != nil {
 				return nil, fmt.Errorf("restore file storage: %w", err)
 			}
 		}
 
 		if cfg.StoreInterval > 0 {
-			ctx, cancel := context.WithCancel(context.Background())
+			tickerCtx, cancel := context.WithCancel(baseCtx)
 
 			go func() {
 				ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
@@ -55,10 +57,10 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 
 				for {
 					select {
-					case <-ctx.Done():
+					case <-tickerCtx.Done():
 						return
 					case <-ticker.C:
-						if err := fs.Save(context.Background()); err != nil {
+						if err := fs.Save(baseCtx); err != nil {
 							slog.Error("save file storage", "error", err)
 						}
 					}
@@ -68,6 +70,20 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 			prevStop := stop
 			stop = func() {
 				cancel()
+
+				if err := fs.Save(baseCtx); err != nil {
+					slog.Error("final save file storage", "error", err)
+				}
+
+				prevStop()
+			}
+		} else {
+			prevStop := stop
+			stop = func() {
+				if err := fs.Save(baseCtx); err != nil {
+					slog.Error("final save file storage", "error", err)
+				}
+
 				prevStop()
 			}
 		}
@@ -77,7 +93,7 @@ func RunServer(cfg config.ServerConfig) (Closer, error) {
 		st = storage.NewMemStorage()
 	}
 
-	srv := server.New(st, db, "", "")
+	srv := server.NewWithoutSecurity(st, db)
 
 	go func() {
 		if err := srv.Run(cfg.Address); err != nil {

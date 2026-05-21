@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/agent"
@@ -54,6 +57,9 @@ func main() {
 		cfg.CryptoKey,
 	)
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	defer stop()
+
 	log.Printf(
 		"Starting agent, poll=%ds, report=%ds, server=%s, rateLimit=%d",
 		cfg.PollInterval,
@@ -62,7 +68,9 @@ func main() {
 		cfg.RateLimit,
 	)
 
-	a.Run()
+	a.Run(ctx)
+
+	log.Println("agent stopped gracefully")
 }
 
 func loadConfig() (agentConfig, error) {

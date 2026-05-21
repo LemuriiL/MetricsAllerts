@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"sync"
 	"syscall"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
+	"github.com/go-resty/resty/v2"
 )
 
 type endpointNotSupportedError struct {
@@ -34,7 +34,7 @@ type Sender struct {
 	serverAddr    string
 	key           string
 	cryptoKeyPath string
-	client        *http.Client
+	client        *resty.Client
 
 	pubKey     *rsa.PublicKey
 	pubKeyErr  error
@@ -50,13 +50,36 @@ func NewSenderWithKey(serverAddr string, key string) *Sender {
 }
 
 func NewSenderWithKeyAndCryptoKey(serverAddr string, key string, cryptoKeyPath string) *Sender {
+	client := resty.New()
+
+	client.SetTimeout(5 * time.Second)
+	client.SetRetryCount(3)
+	client.SetRetryWaitTime(time.Second)
+	client.SetRetryMaxWaitTime(5 * time.Second)
+
+	client.AddRetryCondition(func(r *resty.Response, err error) bool {
+		if err != nil {
+			return isRetryableHTTPError(err)
+		}
+
+		if r == nil {
+			return false
+		}
+
+		status := r.StatusCode()
+
+		if status == httpStatusNotFound || status == httpStatusMethodNotAllowed {
+			return false
+		}
+
+		return status >= 500
+	})
+
 	return &Sender{
 		serverAddr:    serverAddr,
 		key:           key,
 		cryptoKeyPath: cryptoKeyPath,
-		client: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		client:        client,
 	}
 }
 
@@ -96,8 +119,8 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 
 	if isEndpointNotSupported(err) {
 		for i := range metrics {
-			if err2 := s.Send(metrics[i]); err2 != nil {
-				return err2
+			if err = s.Send(metrics[i]); err != nil {
+				return err
 			}
 		}
 
@@ -108,34 +131,7 @@ func (s *Sender) SendBatch(metrics []models.Metrics) error {
 }
 
 func (s *Sender) postJSONWithRetry(ctx context.Context, u string, body []byte) error {
-	waits := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
-
-	err := s.postJSON(ctx, u, body)
-	if err == nil {
-		return nil
-	}
-
-	for i := 0; i < len(waits); i++ {
-		if !isRetryableHTTPError(err) {
-			return err
-		}
-
-		timer := time.NewTimer(waits[i])
-
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-
-		err = s.postJSON(ctx, u, body)
-		if err == nil {
-			return nil
-		}
-	}
-
-	return err
+	return s.postJSON(ctx, u, body)
 }
 
 func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
@@ -144,8 +140,7 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 		return err
 	}
 
-	reqBody := payload
-
+	requestBody := payload
 	encryptedKey := ""
 	nonce := ""
 
@@ -155,47 +150,42 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 			return err
 		}
 
-		reqBody, encryptedKey, nonce, err = cryptoutil.Encrypt(publicKey, payload)
+		requestBody, encryptedKey, nonce, err = cryptoutil.Encrypt(publicKey, payload)
 		if err != nil {
 			return err
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Accept-Encoding", "gzip")
+	request := s.client.R().
+		SetContext(ctx).
+		SetHeader("Content-Type", "application/json").
+		SetHeader("Content-Encoding", "gzip").
+		SetHeader("Accept-Encoding", "gzip").
+		SetBody(requestBody)
 
 	if encryptedKey != "" && nonce != "" {
-		req.Header.Set(cryptoutil.HeaderEncryptedKey, encryptedKey)
-		req.Header.Set(cryptoutil.HeaderNonce, nonce)
+		request.SetHeader(cryptoutil.HeaderEncryptedKey, encryptedKey)
+		request.SetHeader(cryptoutil.HeaderNonce, nonce)
 	}
 
 	if s.key != "" {
 		sum := sha256.Sum256(append(body, []byte(s.key)...))
-		req.Header.Set("HashSHA256", hex.EncodeToString(sum[:]))
+		request.SetHeader("HashSHA256", hex.EncodeToString(sum[:]))
 	}
 
-	resp, err := s.client.Do(req)
+	response, err := request.Post(u)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return endpointNotSupportedError{status: resp.StatusCode}
+	switch response.StatusCode() {
+	case httpStatusOK:
+		return nil
+	case httpStatusNotFound, httpStatusMethodNotAllowed:
+		return endpointNotSupportedError{status: response.StatusCode()}
+	default:
+		return fmt.Errorf("server returned status: %d body=%s", response.StatusCode(), response.String())
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned status: %d body=%s", resp.StatusCode, string(b))
-	}
-
-	return nil
 }
 
 func (s *Sender) getPublicKey() (*rsa.PublicKey, error) {
@@ -209,14 +199,14 @@ func (s *Sender) getPublicKey() (*rsa.PublicKey, error) {
 func gzipBody(body []byte) ([]byte, error) {
 	var buf bytes.Buffer
 
-	gw := gzip.NewWriter(&buf)
+	writer := gzip.NewWriter(&buf)
 
-	if _, err := gw.Write(body); err != nil {
-		_ = gw.Close()
+	if _, err := writer.Write(body); err != nil {
+		_ = writer.Close()
 		return nil, err
 	}
 
-	if err := gw.Close(); err != nil {
+	if err := writer.Close(); err != nil {
 		return nil, err
 	}
 
@@ -233,8 +223,8 @@ func isRetryableHTTPError(err error) bool {
 		return false
 	}
 
-	var ne net.Error
-	if errors.As(err, &ne) {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
 		return true
 	}
 
@@ -253,13 +243,12 @@ func isRetryableHTTPError(err error) bool {
 
 	msg := err.Error()
 
-	if bytes.Contains([]byte(msg), []byte("connection refused")) {
-		return true
-	}
-
-	if bytes.Contains([]byte(msg), []byte("EOF")) {
-		return true
-	}
-
-	return false
+	return bytes.Contains([]byte(msg), []byte("connection refused")) ||
+		bytes.Contains([]byte(msg), []byte("EOF"))
 }
+
+const (
+	httpStatusOK               = 200
+	httpStatusNotFound         = 404
+	httpStatusMethodNotAllowed = 405
+)

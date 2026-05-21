@@ -7,8 +7,10 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -73,10 +75,39 @@ func main() {
 		srv.SetAuditor(auditor)
 	}
 
-	slog.Info("starting server", "addr", cfg.Addr)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	defer stop()
 
-	if err := srv.Run(cfg.Addr); err != nil {
-		log.Fatal(err)
+	serverErrCh := make(chan error, 1)
+
+	go func() {
+		slog.Info("starting server", "addr", cfg.Addr)
+		serverErrCh <- srv.Run(cfg.Addr)
+	}()
+
+	select {
+	case err := <-serverErrCh:
+		if err != nil {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Fatal(err)
+		}
+
+		if closeFn != nil {
+			closeFn()
+		}
+
+		err := <-serverErrCh
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		slog.Info("server stopped gracefully")
 	}
 }
 
@@ -171,11 +202,11 @@ func initStorage(ctx context.Context, cfg serverConfig) (storage.Storage, *sql.D
 			}
 		}
 
-		var stop func()
+		stopCh := make(chan struct{})
+		var tickerStopped bool
 
 		if cfg.StoreInterval > 0 {
 			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
-			stopCh := make(chan struct{})
 
 			go func() {
 				defer ticker.Stop()
@@ -191,11 +222,22 @@ func initStorage(ctx context.Context, cfg serverConfig) (storage.Storage, *sql.D
 					}
 				}
 			}()
-
-			stop = func() { close(stopCh) }
+		} else {
+			tickerStopped = true
 		}
 
-		return fileStorage, nil, stop, nil
+		closeFn := func() {
+			if !tickerStopped {
+				close(stopCh)
+				tickerStopped = true
+			}
+
+			if err := fileStorage.Save(context.Background()); err != nil {
+				slog.Error("final save metrics failed", "error", err)
+			}
+		}
+
+		return fileStorage, nil, closeFn, nil
 	}
 
 	return storage.NewMemStorage(), nil, nil, nil
