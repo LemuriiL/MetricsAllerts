@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -35,6 +36,7 @@ const (
 	defaultAuditFile     = ""
 	defaultAuditURL      = ""
 	defaultCryptoKey     = ""
+	defaultTrustedSubnet = ""
 	defaultConfigPath    = ""
 )
 
@@ -48,6 +50,7 @@ type serverConfig struct {
 	AuditFile     string
 	AuditURL      string
 	CryptoKey     string
+	TrustedSubnet string
 }
 
 func main() {
@@ -68,7 +71,7 @@ func main() {
 		defer closeFn()
 	}
 
-	srv := server.New(st, db, cfg.Key, cfg.CryptoKey)
+	srv := server.New(st, db, cfg.Key, cfg.CryptoKey, cfg.TrustedSubnet)
 
 	auditor := initAuditor(cfg)
 	if auditor != nil {
@@ -121,6 +124,7 @@ func loadConfig() (serverConfig, error) {
 	afFlag := &cli.StringFlag{Val: defaultAuditFile}
 	auFlag := &cli.StringFlag{Val: defaultAuditURL}
 	ckFlag := &cli.StringFlag{Val: defaultCryptoKey}
+	tFlag := &cli.StringFlag{Val: defaultTrustedSubnet}
 	cFlag := &cli.StringFlag{Val: defaultConfigPath}
 
 	flag.Var(aFlag, "a", "HTTP server address")
@@ -132,6 +136,7 @@ func loadConfig() (serverConfig, error) {
 	flag.Var(afFlag, "audit-file", "Audit log file path")
 	flag.Var(auFlag, "audit-url", "Audit receiver URL")
 	flag.Var(ckFlag, "crypto-key", "Path to RSA private key")
+	flag.Var(tFlag, "t", "Trusted subnet in CIDR notation")
 	flag.Var(cFlag, "c", "Path to JSON config")
 	flag.Var(cFlag, "config", "Path to JSON config")
 	flag.Parse()
@@ -173,6 +178,13 @@ func loadConfig() (serverConfig, error) {
 		AuditFile:     pickString(firstNonEmpty(fileCfg.AuditFile, defaultAuditFile), afFlag.Val, afFlag.IsSet, "AUDIT_FILE"),
 		AuditURL:      pickString(firstNonEmpty(fileCfg.AuditURL, defaultAuditURL), auFlag.Val, auFlag.IsSet, "AUDIT_URL"),
 		CryptoKey:     pickString(firstNonEmpty(fileCfg.CryptoKey, defaultCryptoKey), ckFlag.Val, ckFlag.IsSet, "CRYPTO_KEY"),
+		TrustedSubnet: pickString(firstNonEmpty(fileCfg.TrustedSubnet, defaultTrustedSubnet), tFlag.Val, tFlag.IsSet, "TRUSTED_SUBNET"),
+	}
+
+	if strings.TrimSpace(cfg.TrustedSubnet) != "" {
+		if _, _, err := net.ParseCIDR(cfg.TrustedSubnet); err != nil {
+			return serverConfig{}, err
+		}
 	}
 
 	return cfg, nil

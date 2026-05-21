@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -156,11 +157,17 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 		}
 	}
 
+	realIP, err := resolveOutboundIP(u)
+	if err != nil {
+		return err
+	}
+
 	request := s.client.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Content-Encoding", "gzip").
 		SetHeader("Accept-Encoding", "gzip").
+		SetHeader("X-Real-IP", realIP).
 		SetBody(requestBody)
 
 	if encryptedKey != "" && nonce != "" {
@@ -211,6 +218,56 @@ func gzipBody(body []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func resolveOutboundIP(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	hostPort := parsed.Host
+	if hostPort == "" {
+		return "", errors.New("empty server host")
+	}
+
+	if !strings.Contains(hostPort, ":") {
+		switch parsed.Scheme {
+		case "https":
+			hostPort = net.JoinHostPort(hostPort, "443")
+		default:
+			hostPort = net.JoinHostPort(hostPort, "80")
+		}
+	}
+
+	conn, err := net.Dial("udp", hostPort)
+	if err == nil {
+		defer conn.Close()
+
+		addr, ok := conn.LocalAddr().(*net.UDPAddr)
+		if ok && addr.IP != nil {
+			return addr.IP.String(), nil
+		}
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
+			continue
+		}
+
+		ip4 := ipNet.IP.To4()
+		if ip4 != nil {
+			return ip4.String(), nil
+		}
+	}
+
+	return "", errors.New("failed to resolve outbound ip")
 }
 
 func isEndpointNotSupported(err error) bool {
