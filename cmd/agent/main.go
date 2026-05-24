@@ -18,6 +18,7 @@ import (
 
 const (
 	defaultAddr           = "localhost:8080"
+	defaultGRPCAddr       = ""
 	defaultReportInterval = 10
 	defaultPollInterval   = 2
 	defaultKey            = ""
@@ -28,6 +29,7 @@ const (
 
 type agentConfig struct {
 	Addr           string
+	GRPCAddr       string
 	ReportInterval int
 	PollInterval   int
 	Key            string
@@ -48,8 +50,9 @@ func main() {
 		httpAddr = "http://" + httpAddr
 	}
 
-	a := agent.NewAgentWithKeyAndLimitAndCrypto(
+	a := agent.NewAgentWithTransport(
 		httpAddr,
+		cfg.GRPCAddr,
 		time.Duration(cfg.PollInterval)*time.Second,
 		time.Duration(cfg.ReportInterval)*time.Second,
 		cfg.Key,
@@ -61,10 +64,11 @@ func main() {
 	defer stop()
 
 	log.Printf(
-		"Starting agent, poll=%ds, report=%ds, server=%s, rateLimit=%d",
+		"Starting agent, poll=%ds, report=%ds, server=%s, grpc=%s, rateLimit=%d",
 		cfg.PollInterval,
 		cfg.ReportInterval,
 		cfg.Addr,
+		cfg.GRPCAddr,
 		cfg.RateLimit,
 	)
 
@@ -75,6 +79,7 @@ func main() {
 
 func loadConfig() (agentConfig, error) {
 	aFlag := &cli.StringFlag{Val: defaultAddr}
+	gFlag := &cli.StringFlag{Val: defaultGRPCAddr}
 	rFlag := &cli.IntFlag{Val: defaultReportInterval}
 	pFlag := &cli.IntFlag{Val: defaultPollInterval}
 	kFlag := &cli.StringFlag{Val: defaultKey}
@@ -83,6 +88,7 @@ func loadConfig() (agentConfig, error) {
 	cFlag := &cli.StringFlag{Val: defaultConfigPath}
 
 	flag.Var(aFlag, "a", "Server address (host:port)")
+	flag.Var(gFlag, "grpc-address", "gRPC server address")
 	flag.Var(rFlag, "r", "Report interval in seconds")
 	flag.Var(pFlag, "p", "Poll interval in seconds")
 	flag.Var(kFlag, "k", "Signing key")
@@ -128,6 +134,7 @@ func loadConfig() (agentConfig, error) {
 
 	cfg := agentConfig{
 		Addr:           pickString(firstNonEmpty(fileCfg.Address, defaultAddr), aFlag.Val, aFlag.IsSet, "ADDRESS"),
+		GRPCAddr:       pickString(firstNonEmpty(fileCfg.GRPCAddress, defaultGRPCAddr), gFlag.Val, gFlag.IsSet, "GRPC_ADDRESS"),
 		ReportInterval: pickInt(fileReportInterval, rFlag.Val, rFlag.IsSet, "REPORT_INTERVAL"),
 		PollInterval:   pickInt(filePollInterval, pFlag.Val, pFlag.IsSet, "POLL_INTERVAL"),
 		Key:            cli.NormalizeKey(pickString(firstNonEmpty(fileCfg.Key, defaultKey), kFlag.Val, kFlag.IsSet, "KEY")),

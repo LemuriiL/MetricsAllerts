@@ -14,6 +14,7 @@ const defaultMaxConn = 1
 type Agent struct {
 	collector      *Collector
 	sender         *Sender
+	grpcClient     *GRPCClient
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	rateLimit      int
@@ -24,25 +25,38 @@ type sendJob struct {
 }
 
 func NewAgent(serverAddr string, pollInterval, reportInterval time.Duration) *Agent {
-	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, "", defaultMaxConn, "")
+	return NewAgentWithTransport(serverAddr, "", pollInterval, reportInterval, "", defaultMaxConn, "")
 }
 
 func NewAgentWithKey(serverAddr string, pollInterval, reportInterval time.Duration, key string) *Agent {
-	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, defaultMaxConn, "")
+	return NewAgentWithTransport(serverAddr, "", pollInterval, reportInterval, key, defaultMaxConn, "")
 }
 
 func NewAgentWithKeyAndLimit(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int) *Agent {
-	return NewAgentWithKeyAndLimitAndCrypto(serverAddr, pollInterval, reportInterval, key, rateLimit, "")
+	return NewAgentWithTransport(serverAddr, "", pollInterval, reportInterval, key, rateLimit, "")
 }
 
 func NewAgentWithKeyAndLimitAndCrypto(serverAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, cryptoKeyPath string) *Agent {
+	return NewAgentWithTransport(serverAddr, "", pollInterval, reportInterval, key, rateLimit, cryptoKeyPath)
+}
+
+func NewAgentWithTransport(serverAddr string, grpcAddr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, cryptoKeyPath string) *Agent {
 	if rateLimit <= 0 {
 		rateLimit = defaultMaxConn
+	}
+
+	var grpcClient *GRPCClient
+	if grpcAddr != "" {
+		client, err := NewGRPCClient(grpcAddr)
+		if err == nil {
+			grpcClient = client
+		}
 	}
 
 	return &Agent{
 		collector:      NewCollector(),
 		sender:         NewSenderWithKeyAndCryptoKey(serverAddr, key, cryptoKeyPath),
+		grpcClient:     grpcClient,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 		rateLimit:      rateLimit,
@@ -50,6 +64,14 @@ func NewAgentWithKeyAndLimitAndCrypto(serverAddr string, pollInterval, reportInt
 }
 
 func (a *Agent) Run(ctx context.Context) {
+	if a.grpcClient != nil {
+		defer func() {
+			if err := a.grpcClient.Close(); err != nil {
+				log.Printf("failed to close grpc client: %v", err)
+			}
+		}()
+	}
+
 	jobs := make(chan sendJob, a.rateLimit*2)
 
 	var workersWG sync.WaitGroup
@@ -65,7 +87,15 @@ func (a *Agent) Run(ctx context.Context) {
 					continue
 				}
 
-				if err := a.sender.SendBatch(job.metrics); err != nil {
+				var err error
+
+				if a.grpcClient != nil {
+					err = a.grpcClient.UpdateMetrics(job.metrics)
+				} else {
+					err = a.sender.SendBatch(job.metrics)
+				}
+
+				if err != nil {
 					log.Printf("failed to send batch: %v", err)
 				}
 			}

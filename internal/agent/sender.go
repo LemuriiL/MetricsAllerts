@@ -22,6 +22,13 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+const (
+	httpStatusOK               = 200
+	httpStatusNotFound         = 404
+	httpStatusMethodNotAllowed = 405
+	defaultRequestTimeout      = 5 * time.Second
+)
+
 type endpointNotSupportedError struct {
 	status int
 }
@@ -52,7 +59,7 @@ func NewSenderWithKey(serverAddr string, key string) *Sender {
 func NewSenderWithKeyAndCryptoKey(serverAddr string, key string, cryptoKeyPath string) *Sender {
 	client := resty.New()
 
-	client.SetTimeout(5 * time.Second)
+	client.SetTimeout(defaultRequestTimeout)
 	client.SetRetryCount(3)
 	client.SetRetryWaitTime(time.Second)
 	client.SetRetryMaxWaitTime(5 * time.Second)
@@ -156,11 +163,17 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 		}
 	}
 
+	realIP, err := resolveOutboundIP(u, "80")
+	if err != nil {
+		return err
+	}
+
 	request := s.client.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Content-Encoding", "gzip").
 		SetHeader("Accept-Encoding", "gzip").
+		SetHeader("X-Real-IP", realIP).
 		SetBody(requestBody)
 
 	if encryptedKey != "" && nonce != "" {
@@ -246,9 +259,3 @@ func isRetryableHTTPError(err error) bool {
 	return bytes.Contains([]byte(msg), []byte("connection refused")) ||
 		bytes.Contains([]byte(msg), []byte("EOF"))
 }
-
-const (
-	httpStatusOK               = 200
-	httpStatusNotFound         = 404
-	httpStatusMethodNotAllowed = 405
-)

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -21,12 +23,17 @@ import (
 	"github.com/LemuriiL/MetricsAllerts/internal/audit"
 	"github.com/LemuriiL/MetricsAllerts/internal/cli"
 	"github.com/LemuriiL/MetricsAllerts/internal/config"
+	"github.com/LemuriiL/MetricsAllerts/internal/grpcserver"
+	pb "github.com/LemuriiL/MetricsAllerts/internal/proto"
 	"github.com/LemuriiL/MetricsAllerts/internal/server"
+	"github.com/LemuriiL/MetricsAllerts/internal/service"
 	"github.com/LemuriiL/MetricsAllerts/internal/storage"
+	"google.golang.org/grpc"
 )
 
 const (
 	defaultAddr          = "localhost:8080"
+	defaultGRPCAddr      = ""
 	defaultStoreInterval = 300
 	defaultRestore       = true
 	defaultDSN           = ""
@@ -35,11 +42,13 @@ const (
 	defaultAuditFile     = ""
 	defaultAuditURL      = ""
 	defaultCryptoKey     = ""
+	defaultTrustedSubnet = ""
 	defaultConfigPath    = ""
 )
 
 type serverConfig struct {
 	Addr          string
+	GRPCAddr      string
 	StoreInterval int
 	FilePath      string
 	Restore       bool
@@ -48,6 +57,7 @@ type serverConfig struct {
 	AuditFile     string
 	AuditURL      string
 	CryptoKey     string
+	TrustedSubnet string
 }
 
 func main() {
@@ -68,25 +78,61 @@ func main() {
 		defer closeFn()
 	}
 
-	srv := server.New(st, db, cfg.Key, cfg.CryptoKey)
+	httpSrv := server.New(st, db, cfg.Key, cfg.CryptoKey, cfg.TrustedSubnet)
 
 	auditor := initAuditor(cfg)
 	if auditor != nil {
-		srv.SetAuditor(auditor)
+		httpSrv.SetAuditor(auditor)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	defer stop()
 
-	serverErrCh := make(chan error, 1)
+	httpErrCh := make(chan error, 1)
+	grpcErrCh := make(chan error, 1)
 
 	go func() {
-		slog.Info("starting server", "addr", cfg.Addr)
-		serverErrCh <- srv.Run(cfg.Addr)
+		slog.Info("starting http server", "addr", cfg.Addr)
+		httpErrCh <- httpSrv.Run(cfg.Addr)
 	}()
 
+	var grpcSrv *grpc.Server
+	var grpcListener net.Listener
+
+	if strings.TrimSpace(cfg.GRPCAddr) != "" {
+		grpcListener, err = net.Listen("tcp", cfg.GRPCAddr)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		grpcSrv = grpc.NewServer(
+			grpc.UnaryInterceptor(grpcserver.TrustedSubnetInterceptor(cfg.TrustedSubnet)),
+		)
+
+		pb.RegisterMetricsServer(
+			grpcSrv,
+			grpcserver.New(service.NewMetricsService(st)),
+		)
+
+		go func() {
+			slog.Info("starting grpc server", "addr", cfg.GRPCAddr)
+
+			err := grpcSrv.Serve(grpcListener)
+			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				grpcErrCh <- err
+				return
+			}
+
+			grpcErrCh <- nil
+		}()
+	}
+
 	select {
-	case err := <-serverErrCh:
+	case err := <-httpErrCh:
+		if err != nil {
+			log.Fatal(err)
+		}
+	case err := <-grpcErrCh:
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -94,7 +140,22 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		if grpcSrv != nil {
+			done := make(chan struct{})
+
+			go func() {
+				grpcSrv.GracefulStop()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-shutdownCtx.Done():
+				grpcSrv.Stop()
+			}
+		}
+
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 			log.Fatal(err)
 		}
 
@@ -102,9 +163,16 @@ func main() {
 			closeFn()
 		}
 
-		err := <-serverErrCh
-		if err != nil {
-			log.Fatal(err)
+		httpErr := <-httpErrCh
+		if httpErr != nil {
+			log.Fatal(httpErr)
+		}
+
+		if grpcSrv != nil {
+			grpcErr := <-grpcErrCh
+			if grpcErr != nil {
+				log.Fatal(grpcErr)
+			}
 		}
 
 		slog.Info("server stopped gracefully")
@@ -113,6 +181,7 @@ func main() {
 
 func loadConfig() (serverConfig, error) {
 	aFlag := &cli.StringFlag{Val: defaultAddr}
+	gFlag := &cli.StringFlag{Val: defaultGRPCAddr}
 	iFlag := &cli.IntFlag{Val: defaultStoreInterval}
 	fFlag := &cli.StringFlag{Val: defaultFilePath}
 	rFlag := &cli.BoolFlag{Val: defaultRestore}
@@ -121,9 +190,11 @@ func loadConfig() (serverConfig, error) {
 	afFlag := &cli.StringFlag{Val: defaultAuditFile}
 	auFlag := &cli.StringFlag{Val: defaultAuditURL}
 	ckFlag := &cli.StringFlag{Val: defaultCryptoKey}
+	tFlag := &cli.StringFlag{Val: defaultTrustedSubnet}
 	cFlag := &cli.StringFlag{Val: defaultConfigPath}
 
 	flag.Var(aFlag, "a", "HTTP server address")
+	flag.Var(gFlag, "grpc-address", "gRPC server address")
 	flag.Var(iFlag, "i", "Store interval in seconds")
 	flag.Var(fFlag, "f", "File storage path")
 	flag.Var(rFlag, "r", "Restore from file on start")
@@ -132,6 +203,7 @@ func loadConfig() (serverConfig, error) {
 	flag.Var(afFlag, "audit-file", "Audit log file path")
 	flag.Var(auFlag, "audit-url", "Audit receiver URL")
 	flag.Var(ckFlag, "crypto-key", "Path to RSA private key")
+	flag.Var(tFlag, "t", "Trusted subnet in CIDR notation")
 	flag.Var(cFlag, "c", "Path to JSON config")
 	flag.Var(cFlag, "config", "Path to JSON config")
 	flag.Parse()
@@ -165,6 +237,7 @@ func loadConfig() (serverConfig, error) {
 
 	cfg := serverConfig{
 		Addr:          pickString(firstNonEmpty(fileCfg.Address, defaultAddr), aFlag.Val, aFlag.IsSet, "ADDRESS"),
+		GRPCAddr:      pickString(firstNonEmpty(fileCfg.GRPCAddress, defaultGRPCAddr), gFlag.Val, gFlag.IsSet, "GRPC_ADDRESS"),
 		StoreInterval: pickInt(fileStoreInterval, iFlag.Val, iFlag.IsSet, "STORE_INTERVAL"),
 		FilePath:      pickStringFromEnvs(fileStorePath, fFlag.Val, fFlag.IsSet, "STORE_FILE", "FILE_STORAGE_PATH"),
 		Restore:       pickBool(fileRestore, rFlag.Val, rFlag.IsSet, "RESTORE"),
@@ -173,6 +246,13 @@ func loadConfig() (serverConfig, error) {
 		AuditFile:     pickString(firstNonEmpty(fileCfg.AuditFile, defaultAuditFile), afFlag.Val, afFlag.IsSet, "AUDIT_FILE"),
 		AuditURL:      pickString(firstNonEmpty(fileCfg.AuditURL, defaultAuditURL), auFlag.Val, auFlag.IsSet, "AUDIT_URL"),
 		CryptoKey:     pickString(firstNonEmpty(fileCfg.CryptoKey, defaultCryptoKey), ckFlag.Val, ckFlag.IsSet, "CRYPTO_KEY"),
+		TrustedSubnet: pickString(firstNonEmpty(fileCfg.TrustedSubnet, defaultTrustedSubnet), tFlag.Val, tFlag.IsSet, "TRUSTED_SUBNET"),
+	}
+
+	if strings.TrimSpace(cfg.TrustedSubnet) != "" {
+		if _, _, err := net.ParseCIDR(cfg.TrustedSubnet); err != nil {
+			return serverConfig{}, err
+		}
 	}
 
 	return cfg, nil

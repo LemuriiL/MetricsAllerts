@@ -25,6 +25,7 @@ type Server struct {
 	handler       *Handler
 	key           string
 	cryptoKeyPath string
+	trustedSubnet string
 
 	privateKey     *rsa.PrivateKey
 	privateKeyErr  error
@@ -33,11 +34,12 @@ type Server struct {
 	httpServer *http.Server
 }
 
-func New(storage storage.Storage, db *sql.DB, key string, cryptoKeyPath string) *Server {
+func New(storage storage.Storage, db *sql.DB, key string, cryptoKeyPath string, trustedSubnet string) *Server {
 	return &Server{
 		handler:       NewHandlerWithDB(storage, db),
 		key:           key,
 		cryptoKeyPath: cryptoKeyPath,
+		trustedSubnet: trustedSubnet,
 	}
 }
 
@@ -63,6 +65,10 @@ func (s *Server) Run(addr string) error {
 	mux.HandleFunc("POST /value", s.handler.GetMetricJSON)
 
 	var h http.Handler = mux
+
+	if s.trustedSubnet != "" {
+		h = trustedSubnetMiddleware(s.trustedSubnet)(h)
+	}
 
 	if s.key != "" {
 		h = verifyHashMiddleware(s.key)(h)

@@ -7,11 +7,13 @@ import (
 
 type ServerFileConfig struct {
 	Address       string `json:"address"`
+	GRPCAddress   string `json:"grpc_address"`
 	Restore       *bool  `json:"restore"`
 	StoreInterval string `json:"store_interval"`
 	StoreFile     string `json:"store_file"`
 	DatabaseDSN   string `json:"database_dsn"`
 	CryptoKey     string `json:"crypto_key"`
+	TrustedSubnet string `json:"trusted_subnet"`
 	Key           string `json:"key"`
 	AuditFile     string `json:"audit_file"`
 	AuditURL      string `json:"audit_url"`
@@ -19,6 +21,7 @@ type ServerFileConfig struct {
 
 type AgentFileConfig struct {
 	Address        string `json:"address"`
+	GRPCAddress    string `json:"grpc_address"`
 	ReportInterval string `json:"report_interval"`
 	PollInterval   string `json:"poll_interval"`
 	CryptoKey      string `json:"crypto_key"`

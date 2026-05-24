@@ -5,7 +5,9 @@ import (
 	"crypto/rsa"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
@@ -95,6 +97,41 @@ func decryptMiddleware(privateKeyProvider func() (*rsa.PrivateKey, error)) func(
 			_ = r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewReader(plaintext))
 			r.ContentLength = int64(len(plaintext))
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func trustedSubnetMiddleware(cidr string) func(http.Handler) http.Handler {
+	if strings.TrimSpace(cidr) == "" {
+		return func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			})
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			realIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+			if realIP == "" {
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+
+			ip := net.ParseIP(realIP)
+			if ip == nil || !network.Contains(ip) {
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
 
 			next.ServeHTTP(w, r)
 		})
