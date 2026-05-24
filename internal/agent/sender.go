@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,6 +20,13 @@ import (
 	"github.com/LemuriiL/MetricsAllerts/internal/cryptoutil"
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 	"github.com/go-resty/resty/v2"
+)
+
+const (
+	httpStatusOK               = 200
+	httpStatusNotFound         = 404
+	httpStatusMethodNotAllowed = 405
+	defaultRequestTimeout      = 5 * time.Second
 )
 
 type endpointNotSupportedError struct {
@@ -53,7 +59,7 @@ func NewSenderWithKey(serverAddr string, key string) *Sender {
 func NewSenderWithKeyAndCryptoKey(serverAddr string, key string, cryptoKeyPath string) *Sender {
 	client := resty.New()
 
-	client.SetTimeout(5 * time.Second)
+	client.SetTimeout(defaultRequestTimeout)
 	client.SetRetryCount(3)
 	client.SetRetryWaitTime(time.Second)
 	client.SetRetryMaxWaitTime(5 * time.Second)
@@ -157,7 +163,7 @@ func (s *Sender) postJSON(ctx context.Context, u string, body []byte) error {
 		}
 	}
 
-	realIP, err := resolveOutboundIP(u)
+	realIP, err := resolveOutboundIP(u, "80")
 	if err != nil {
 		return err
 	}
@@ -220,56 +226,6 @@ func gzipBody(body []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func resolveOutboundIP(rawURL string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
-	}
-
-	hostPort := parsed.Host
-	if hostPort == "" {
-		return "", errors.New("empty server host")
-	}
-
-	if !strings.Contains(hostPort, ":") {
-		switch parsed.Scheme {
-		case "https":
-			hostPort = net.JoinHostPort(hostPort, "443")
-		default:
-			hostPort = net.JoinHostPort(hostPort, "80")
-		}
-	}
-
-	conn, err := net.Dial("udp", hostPort)
-	if err == nil {
-		defer conn.Close()
-
-		addr, ok := conn.LocalAddr().(*net.UDPAddr)
-		if ok && addr.IP != nil {
-			return addr.IP.String(), nil
-		}
-	}
-
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", err
-	}
-
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
-			continue
-		}
-
-		ip4 := ipNet.IP.To4()
-		if ip4 != nil {
-			return ip4.String(), nil
-		}
-	}
-
-	return "", errors.New("failed to resolve outbound ip")
-}
-
 func isEndpointNotSupported(err error) bool {
 	var e endpointNotSupportedError
 	return errors.As(err, &e)
@@ -303,9 +259,3 @@ func isRetryableHTTPError(err error) bool {
 	return bytes.Contains([]byte(msg), []byte("connection refused")) ||
 		bytes.Contains([]byte(msg), []byte("EOF"))
 }
-
-const (
-	httpStatusOK               = 200
-	httpStatusNotFound         = 404
-	httpStatusMethodNotAllowed = 405
-)

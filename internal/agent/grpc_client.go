@@ -2,15 +2,10 @@ package agent
 
 import (
 	"context"
-	"errors"
-	"net"
-	"strings"
-	"time"
 
 	models "github.com/LemuriiL/MetricsAllerts/internal/model"
 	pb "github.com/LemuriiL/MetricsAllerts/internal/proto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
@@ -28,23 +23,6 @@ func NewGRPCClient(addr string) (*GRPCClient, error) {
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn.Connect()
-
-	for {
-		state := conn.GetState()
-		if state == connectivity.Ready {
-			break
-		}
-
-		if !conn.WaitForStateChange(ctx, state) {
-			_ = conn.Close()
-			return nil, context.DeadlineExceeded
-		}
 	}
 
 	return &GRPCClient{
@@ -67,7 +45,7 @@ func (c *GRPCClient) UpdateMetrics(metrics []models.Metrics) error {
 		return nil
 	}
 
-	ip, err := resolveGRPCOutboundIP(c.addr)
+	ip, err := resolveOutboundIP(c.addr, "9090")
 	if err != nil {
 		return err
 	}
@@ -101,7 +79,7 @@ func (c *GRPCClient) UpdateMetrics(metrics []models.Metrics) error {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRequestTimeout)
 	defer cancel()
 
 	ctx = metadata.AppendToOutgoingContext(ctx, "x-real-ip", ip)
@@ -111,40 +89,4 @@ func (c *GRPCClient) UpdateMetrics(metrics []models.Metrics) error {
 	})
 
 	return err
-}
-
-func resolveGRPCOutboundIP(addr string) (string, error) {
-	target := addr
-	if !strings.Contains(target, ":") {
-		target = net.JoinHostPort(target, "9090")
-	}
-
-	conn, err := net.Dial("udp", target)
-	if err == nil {
-		defer conn.Close()
-
-		udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
-		if ok && udpAddr.IP != nil {
-			return udpAddr.IP.String(), nil
-		}
-	}
-
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", err
-	}
-
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
-			continue
-		}
-
-		ip4 := ipNet.IP.To4()
-		if ip4 != nil {
-			return ip4.String(), nil
-		}
-	}
-
-	return "", errors.New("failed to resolve outbound ip")
 }
